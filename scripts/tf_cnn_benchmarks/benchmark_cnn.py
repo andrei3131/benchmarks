@@ -690,11 +690,11 @@ def benchmark_one_step(sess,
   step_train_times.append(train_time)
   if (show_images_per_sec and step >= 0 and
       (step == 0 or (step + 1) % params.display_every == 0)):
-    speed_mean, speed_uncertainty, speed_jitter = get_perf_timing(
+    speed, speed_mean, speed_uncertainty, speed_jitter = get_perf_timing(
         batch_size, step_train_times)
     log_str = '%i\t%s\t%.*f' % (
         step + 1,
-        get_perf_timing_str(speed_mean, speed_uncertainty, speed_jitter),
+        get_perf_timing_str(speed, speed_mean, speed_uncertainty, speed_jitter),
         LOSS_AND_ACCURACY_DIGITS_TO_SHOW, lossval)
     if 'top_1_accuracy' in results:
       log_str += '\t%.*f\t%.*f' % (
@@ -741,21 +741,22 @@ def benchmark_one_step(sess,
   return (summary_str, lossval)
 
 
-def get_perf_timing_str(speed_mean, speed_uncertainty, speed_jitter, scale=1):
+def get_perf_timing_str(speed, speed_mean, speed_uncertainty, speed_jitter, scale=1):
   if scale == 1:
-    return ('images/sec: %.1f +/- %.1f (jitter = %.1f)' %
-            (speed_mean, speed_uncertainty, speed_jitter))
+    return ('images/sec %.1f, average images/sec: %.1f +/- %.1f (jitter = %.1f)' %
+            (speed, speed_mean, speed_uncertainty, speed_jitter))
   else:
-    return 'images/sec: %.1f' % speed_mean
+    return 'images/sec %.1f, average images/sec: %.1f' % (speed, speed_mean)
 
 
 def get_perf_timing(batch_size, step_train_times, scale=1):
   times = np.array(step_train_times)
   speeds = batch_size / times
+  speed = scale * batch_size / times[-1]
   speed_mean = scale * batch_size / np.mean(times)
   speed_uncertainty = np.std(speeds) / np.sqrt(float(len(speeds)))
   speed_jitter = 1.4826 * np.median(np.abs(speeds - np.median(speeds)))
-  return speed_mean, speed_uncertainty, speed_jitter
+  return speed, speed_mean, speed_uncertainty, speed_jitter
 
 
 def load_checkpoint(saver, sess, ckpt_dir):
