@@ -21,4 +21,8 @@ If you don't run your container in privileged mode, you may see the following me
 [a8c9914754d2:00040] Read -1, expected 131072, errno = 1
 ```
 
-You can ignore this message.
+You can ignore this message or filter out this message as follows:
+
+```bash
+$ mpirun -np 4 -H localhost:4 python tf_cnn_benchmarks.py --num_gpus=1 --batch_size=32 --model=resnet50 --variable_update=horovod |& grep -v "Read -1"
+```
