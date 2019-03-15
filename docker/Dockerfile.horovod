@@ -78,9 +78,9 @@ RUN cat /etc/ssh/ssh_config | grep -v StrictHostKeyChecking > /etc/ssh/ssh_confi
     echo "    StrictHostKeyChecking no" >> /etc/ssh/ssh_config.new && \
     mv /etc/ssh/ssh_config.new /etc/ssh/ssh_config
 
-# Download tensorflow benchmark and ensure TF 1.12 compatible
+# Download tensorflow benchmark
 RUN git clone https://github.com/tensorflow/benchmarks.git && \
     cd benchmarks && \
-    git checkout cnn_tf_v1.12_compatible
+    git checkout master
 
 WORKDIR "/benchmarks/scripts/tf_cnn_benchmarks"
