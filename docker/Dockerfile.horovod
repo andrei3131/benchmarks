@@ -71,7 +71,7 @@ RUN cat /etc/ssh/ssh_config | grep -v StrictHostKeyChecking > /etc/ssh/ssh_confi
     mv /etc/ssh/ssh_config.new /etc/ssh/ssh_config
 
 # Download tensorflow benchmark
-RUN git clone https://github.com/tensorflow/benchmarks.git && \
+RUN git clone https://github.com/luomai/benchmarks.git && \
     cd benchmarks && \
     git checkout master
 

@@ -3,7 +3,7 @@
 The following command builds a custom image for running tensorflow-benchmarks and Horovod.
 
 ```bash
-$ docker build -f Dockerfile.hvd_tf_benchmarks -t hvd-bench:latest .
+$ docker build -f Dockerfile.horovod -t horovod-benchmark:latest .
 ```
 
 ## Train with synthetic data
@@ -11,7 +11,7 @@ $ docker build -f Dockerfile.hvd_tf_benchmarks -t hvd-bench:latest .
 The following command run tensorflow-benchmarks for ResNet50 using 4 local GPUs and synchronise through Horovod. Check more about [Horovod Docker](https://github.com/horovod/horovod/blob/master/docs/docker.md).
 
 ```bash
-$ nvidia-docker run -it hvd-bench:latest
+$ nvidia-docker run -it horovod-benchmark:latest
 root@243d81c298a9:/benchmarks/scripts/tf_cnn_benchmarks# mpirun -np 4 -H localhost:4 python tf_cnn_benchmarks.py --num_gpus=1 --batch_size=32 --model=resnet50 --variable_update=horovod
 ```
 
