@@ -20,7 +20,6 @@ RUN apt-get update && \
         vim \
         wget \
         ca-certificates \
-        cuda-10-0 \
         libcudnn7=${CUDNN_VERSION} \
         libnccl2=${NCCL_VERSION} \
         libnccl-dev=${NCCL_VERSION} \
