@@ -17,7 +17,6 @@ RUN apt-get update && \
         cmake \
         git \
         curl \
-        vim \
         wget \
         ca-certificates \
         libcudnn7=${CUDNN_VERSION} \
@@ -27,7 +26,8 @@ RUN apt-get update && \
         libpng-dev \
         python${PYTHON_VERSION} \
         python${PYTHON_VERSION}-dev \
-        python3-pip
+        python3-pip \
+        python3-setuptools
 
 RUN ln -s /usr/bin/python${PYTHON_VERSION} /usr/bin/python
 
