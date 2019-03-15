@@ -32,7 +32,8 @@ RUN apt-get update && \
 RUN ln -s /usr/bin/python${PYTHON_VERSION} /usr/bin/python
 
 # Install TensorFlow
-RUN pip3 install tensorflow-gpu==${TENSORFLOW_VERSION}
+RUN pip3 install --upgrade pip && \
+        pip3 install tensorflow-gpu==${TENSORFLOW_VERSION}
 
 # Install Open MPI
 RUN mkdir /tmp/openmpi && \
