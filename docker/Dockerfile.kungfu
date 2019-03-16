@@ -48,6 +48,7 @@ RUN cd /usr/src/googletest && \
 RUN wget -q https://dl.google.com/go/go1.11.linux-amd64.tar.gz && \
     tar -C /usr/local -xf go1.11.linux-amd64.tar.gz && \
     rm go1.11.linux-amd64.tar.gz
+ENV PATH=${PATH}:/usr/local/go/bin
 
 # Install KungFu
 RUN cd KungFu && \
