@@ -3256,10 +3256,10 @@ class BenchmarkCNN(object):
         grads = [hvd.allreduce(grad, average=False, device_dense=horovod_device)
                  for grad in grads]
       elif self.params.variable_update == 'kungfu':
-        # from kungfu.ops import gpu_group_all_reduce
-        # grads = gpu_group_all_reduce(grads)
-        from kungfu.ops import cpu_group_all_reduce
-        grads = cpu_group_all_reduce(grads)
+        from kungfu.ops import gpu_group_all_reduce
+        grads = gpu_group_all_reduce(grads)
+        # from kungfu.ops import cpu_group_all_reduce
+        # grads = cpu_group_all_reduce(grads)
 
       if self.params.staged_vars:
         grad_dtypes = [grad.dtype for grad in grads]
