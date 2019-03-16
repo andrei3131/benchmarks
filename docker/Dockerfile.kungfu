@@ -35,7 +35,11 @@ RUN echo NCCL_DEBUG=INFO >> /etc/nccl.conf
 # Download tensorflow benchmark and install kungfu
 RUN git clone https://github.com/luomai/benchmarks.git && \
     cd benchmarks && \
-    git checkout kungfu-master && \
-    ./scripts/install-kungfu.sh   
+    git checkout kungfu-master
+
+ADD KungFu .
+
+RUN cd KungFu && \
+    env export KUNGFU_USE_NCCL=1 pip3 install --no-index --user -U .
 
 WORKDIR "/benchmarks/scripts/tf_cnn_benchmarks"
