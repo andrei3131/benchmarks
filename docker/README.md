@@ -1,9 +1,11 @@
+
 ## Build
 
 The following command builds a custom image for running tensorflow-benchmarks and Horovod.
 
 ```bash
 $ docker build -f Dockerfile.horovod -t horovod-benchmark:latest .
+$ docker build -f Dockerfile.kungfu -t horovod-benchmark:latest .
 ```
 
 ## Train with synthetic data
@@ -12,7 +14,7 @@ The following command run tensorflow-benchmarks for ResNet50 using 4 local GPUs 
 
 ```bash
 $ nvidia-docker run -it horovod-benchmark:latest
-root@243d81c298a9:/benchmarks/scripts/tf_cnn_benchmarks# mpirun -np 4 -H localhost:4 python tf_cnn_benchmarks.py --num_gpus=1 --batch_size=32 --model=resnet50 --variable_update=horovod
+root@243d81c298a9:/benchmarks/scripts/tf_cnn_benchmarks# mpirun -np 4 -H localhost:4 python3 tf_cnn_benchmarks.py --num_gpus=1 --batch_size=32 --model=resnet50 --variable_update=horovod
 ```
 
 If you don't run your container in privileged mode, you may see the following message:
@@ -24,7 +26,7 @@ If you don't run your container in privileged mode, you may see the following me
 You can ignore this message, or filter out this message using `|& grep -v "Read -1"` as follows:
 
 ```bash
-$ mpirun -np 4 -H localhost:4 python tf_cnn_benchmarks.py --num_gpus=1 --batch_size=32 --model=resnet50 --variable_update=horovod |& grep -v "Read -1"
+$ mpirun -np 4 -H localhost:4 python3 tf_cnn_benchmarks.py --num_gpus=1 --batch_size=32 --model=resnet50 --variable_update=horovod |& grep -v "Read -1"
 ```
 
 ## Train with real ImageNet

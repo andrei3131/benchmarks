@@ -36,7 +36,7 @@ RUN mkdir /tmp/openmpi && \
     ldconfig && \
     rm -rf /tmp/openmpi
 
-RUN ln -s /usr/bin/python${PYTHON_VERSION} /usr/bin/python
+RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # Install TensorFlow
 RUN pip3 install tensorflow-gpu==${TENSORFLOW_VERSION}
