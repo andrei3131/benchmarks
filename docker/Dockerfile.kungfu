@@ -28,10 +28,8 @@ RUN apt-get update && \
 # Install TensorFlow
 RUN pip3 install tensorflow-gpu==${TENSORFLOW_VERSION}
 
-# Download custom tensorflow benchmark
-RUN git clone https://github.com/luomai/benchmarks.git && \
-    cd benchmarks && \
-    git checkout kungfu-master
+# Add the benchmark project
+ADD . /benchmarks
 
 # Add the KungFu sources
 ADD ./KungFu /KungFu
