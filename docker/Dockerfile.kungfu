@@ -26,7 +26,7 @@ RUN apt-get update && \
         python3-setuptools
         
 # Install TensorFlow
-RUN pip3 install wheel tensorflow-gpu==${TENSORFLOW_VERSION}
+RUN pip3 install tensorflow-gpu==${TENSORFLOW_VERSION}
 
 # Set default NCCL parameters
 RUN echo NCCL_DEBUG=INFO >> /etc/nccl.conf
@@ -51,6 +51,7 @@ RUN wget -q https://dl.google.com/go/go1.11.linux-amd64.tar.gz && \
 
 # Install KungFu
 RUN cd KungFu && \
-    env KUNGFU_USE_NCCL=1 pip3 install --no-index --user -U .
+        dconfig /usr/local/cuda-10.0/targets/x86_64-linux/lib/stubs && \
+        env KUNGFU_USE_NCCL=1 pip3 install --no-index --user -U .
 
 WORKDIR "/benchmarks/scripts/tf_cnn_benchmarks"
