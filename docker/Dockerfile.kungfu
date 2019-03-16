@@ -11,9 +11,9 @@ RUN apt-get update && \
         apt-get install -y --allow-downgrades --allow-change-held-packages --no-install-recommends \
         build-essential \
         cmake \
+        wget \
         git \
         curl \
-        wget \
         ca-certificates \
         libcudnn7=${CUDNN_VERSION} \
         libnccl2=${NCCL_VERSION} \
@@ -22,7 +22,8 @@ RUN apt-get update && \
         libpng-dev \
         python3-dev \
         python3-pip \
-        python3-setuptools
+        python3-setuptools \
+        libgtest-dev
 
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
@@ -32,13 +33,25 @@ RUN pip3 install tensorflow-gpu==${TENSORFLOW_VERSION}
 # Set default NCCL parameters
 RUN echo NCCL_DEBUG=INFO >> /etc/nccl.conf
 
-# Download tensorflow benchmark and install kungfu
+# Download custom tensorflow benchmark
 RUN git clone https://github.com/luomai/benchmarks.git && \
     cd benchmarks && \
     git checkout kungfu-master
 
+# Add the KungFu sources
 ADD ./KungFu ./KungFu
 
+# Install gtest
+RUN cd /usr/src/googletest && \
+    cmake . -DCMAKE_CXX_FLAGS=-std=c++11 -Dgtest_disable_pthreads=1 && \
+    make install
+
+# Install golang 1.11.1
+RUN wget -q https://dl.google.com/go/go1.11.linux-amd64.tar.gz && \
+    tar -C /usr/local -xf go1.11.linux-amd64.tar.gz && \
+    rm go1.11.linux-amd64.tar.gz
+
+# Install KungFu
 RUN cd KungFu && \
     env KUNGFU_USE_NCCL=1 pip3 install --no-index --user -U .
 
