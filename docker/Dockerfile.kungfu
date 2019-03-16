@@ -39,7 +39,7 @@ RUN git clone https://github.com/luomai/benchmarks.git && \
 
 ADD . ./KungFu
 
-RUN cd KungFu && \
-    env KUNGFU_USE_NCCL=1 pip3 install --no-index --user -U .
+# RUN cd KungFu && \
+#     env KUNGFU_USE_NCCL=1 pip3 install --no-index --user -U .
 
-WORKDIR "/benchmarks/scripts/tf_cnn_benchmarks"
+# WORKDIR "/benchmarks/scripts/tf_cnn_benchmarks"
