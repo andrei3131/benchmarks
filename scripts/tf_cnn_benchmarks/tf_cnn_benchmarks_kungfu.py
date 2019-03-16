@@ -55,11 +55,11 @@ def main(positional_arguments):
     raise ValueError('Received unknown positional arguments: %s'
                      % positional_arguments[1:])
 
-  params = benchmark_cnn.make_params_from_flags()
+  params = benchmark_cnn_kungfu.make_params_from_flags()
   with mlperf.mlperf_logger(absl_flags.FLAGS.ml_perf_compliance_logging,
                             params.model):
-    params = benchmark_cnn.setup(params)
-    bench = benchmark_cnn.BenchmarkCNN(params)
+    params = benchmark_cnn_kungfu.setup(params)
+    bench = benchmark_cnn_kungfu.BenchmarkCNN(params)
 
     tfversion = cnn_util.tensorflow_version_tuple()
     log_fn('TensorFlow:  %i.%i' % (tfversion[0], tfversion[1]))

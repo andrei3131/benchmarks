@@ -28,9 +28,6 @@ RUN apt-get update && \
 # Install TensorFlow
 RUN pip3 install tensorflow-gpu==${TENSORFLOW_VERSION}
 
-# Add the benchmark project
-ADD . /benchmarks
-
 # Add the KungFu sources
 ADD ./KungFu /KungFu
 
@@ -49,5 +46,8 @@ ENV PATH=${PATH}:/usr/local/go/bin
 RUN cd KungFu && \
         ldconfig /usr/local/cuda-10.0/targets/x86_64-linux/lib/stubs && \
         env KUNGFU_USE_NCCL=1 pip3 install --no-index --user -U .
+
+# Add the benchmark project
+ADD . /benchmarks
 
 WORKDIR "/benchmarks/scripts/tf_cnn_benchmarks"
