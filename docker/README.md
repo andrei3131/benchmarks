@@ -5,7 +5,7 @@ The following command builds a custom image for running tensorflow-benchmarks an
 
 ```bash
 $ docker build -f Dockerfile.horovod -t horovod-benchmark:latest .
-$ docker build -f Dockerfile.kungfu -t horovod-benchmark:latest .
+$ docker build -f Dockerfile.kungfu -t kungfu-benchmark:latest .
 ```
 
 ## Train with synthetic data
