@@ -29,9 +29,6 @@ RUN apt-get update && \
 # Install TensorFlow
 RUN pip3 install tensorflow-gpu==${TENSORFLOW_VERSION}
 
-# Add the KungFu sources
-ADD ./KungFu /KungFu
-
 # Install gtest
 RUN cd /usr/src/googletest && \
     cmake . -DCMAKE_CXX_FLAGS=-std=c++11 -Dgtest_disable_pthreads=1 && \
@@ -42,6 +39,9 @@ RUN wget -q https://dl.google.com/go/go1.11.linux-amd64.tar.gz && \
     tar -C /usr/local -xf go1.11.linux-amd64.tar.gz && \
     rm go1.11.linux-amd64.tar.gz
 ENV PATH=${PATH}:/usr/local/go/bin
+
+# Add the KungFu sources
+ADD ./KungFu /KungFu
 
 # Install KungFu
 RUN cd KungFu && \
