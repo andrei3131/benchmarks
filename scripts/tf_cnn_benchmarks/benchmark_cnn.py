@@ -107,6 +107,11 @@ InputProcessingInfo = namedtuple(
         'multi_device_iterator_input'
     ])
 
+# FIXME
+flags.DEFINE_string('data_url', 'trivial', 'placeholder')
+flags.DEFINE_string('train_url', 'trivial', 'placeholder')
+# FIXME
+
 
 # TODO(reedwm): add upper_bound and lower_bound to appropriate integer and
 # float flags, and change certain string flags to enum flags.
