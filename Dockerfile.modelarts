@@ -2,8 +2,8 @@
 # ModelArts example: https://github.com/huawei-clouds/modelarts-example/blob/master/CustomImage
 FROM swr.cn-north-1.myhuaweicloud.com/eiwizard/custom-gpu-cuda9-base:1.0 as base
 
-RUN sudo apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/7fa2af80.pub
-RUN apt update && apt install \
+RUN apt search cuda
+RUN apt update && apt install -y --no-install-recommends \
         build-essential \
         cuda9.0 \
         cuda-cublas-9-0 \
