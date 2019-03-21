@@ -3,6 +3,9 @@
 # FROM swr.cn-north-1.myhuaweicloud.com/eiwizard/custom-gpu-cuda9-base:1.0 as base
 FROM swr.cn-north-1.myhuaweicloud.com/eiwizard/custom-gpu-cuda9-inner-moxing-cp36:1.1 as base
 
+# Fix the source lists
+RUN sed -i 's/cmc-cd-mirror.rnd.huawei.com/security.ubuntu.com/g' /etc/apt/sources.list
+
 # The pip source has been pre-configured to an internal source. Roll back to public sources.
 RUN rm $HOME/.pip/pip.conf
 
