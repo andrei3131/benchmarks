@@ -3,7 +3,7 @@
 # FROM swr.cn-north-1.myhuaweicloud.com/eiwizard/custom-gpu-cuda9-base:1.0 as base
 FROM swr.cn-north-1.myhuaweicloud.com/eiwizard/custom-gpu-cuda9-inner-moxing-cp36:1.1 as base
 
-RUN conda create --name tf_gpu tensorflow-gpu=1.12
+RUN conda install tensorflow-gpu=1.12
 
 # Add the benchmark project
 ADD . /benchmarks
