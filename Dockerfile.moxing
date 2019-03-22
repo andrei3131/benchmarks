@@ -1,6 +1,5 @@
 # CrossBow Docker image based on Huawei ModelArts CUDA 9
 # ModelArts example: https://github.com/huawei-clouds/modelarts-example/blob/master/CustomImage
-# FROM swr.cn-north-1.myhuaweicloud.com/eiwizard/custom-gpu-cuda9-base:1.0 as base
 FROM swr.cn-north-1.myhuaweicloud.com/eiwizard/custom-gpu-cuda9-inner-moxing-cp36:1.1 as base
 
 # Fix the source lists
@@ -34,12 +33,6 @@ RUN apt update && apt install -y --no-install-recommends \
         libcudnn7=7.2.1.38-1+cuda9.0 \
         libnccl2=2.2.13-1+cuda9.0 \
         cuda-command-line-tools-9-0 \
-        #git \
-        #wget \
-        #cmake \
-        #python3 \
-        #python3-pip  \
-        #python3-setuptools \
         && rm -rf /var/lib/apt/lists/*
 
 # Install tensorflow-gpu 1.12.0
