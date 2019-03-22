@@ -64,6 +64,12 @@ from tensorflow.python.util import nest
 
 _DEFAULT_NUM_BATCHES = 100
 
+#
+# Modified by Alexandros Koliousis (20/3/2019
+#
+_DEBUG = False
+_DEBUG_TRAINING = False
+_DEBUG_TEST = False
 
 # GraphInfo encapsulates the tensors/ops that we care about after building a
 # graph. We use them to benchmark the graph.
@@ -657,6 +663,16 @@ flags.DEFINE_string('benchmark_test_id', None,
                     'consumption, and does not have any impact within the '
                     'system.')
 
+#
+# Modified by Alexandros Koliousis (19/3/2019)
+#
+# Custom checkpointing variables
+#
+flags.DEFINE_boolean('checkpoint_manually', True, '')
+flags.DEFINE_float  ('checkpoint_interval', 0, '')
+flags.DEFINE_string ('checkpoint_directory', None, '')
+flags.DEFINE_integer('checkpoint_version',  1, '')
+
 platforms_util.define_platform_params()
 
 
@@ -711,6 +727,21 @@ class GlobalStepWatcher(threading.Thread):
 class CheckpointNotFoundException(Exception):
   pass
 
+#
+# Modified by Alexandros Koliousis (20/3/2019)
+#
+def _checkpoint_path(root, version):
+    v = version
+    while True:
+        directory = os.path.join(root, ('v-%06d' % (v)))
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+            break
+        # Increment version and try again
+        v += 1
+
+    filepath = os.path.join(directory, 'model.ckpt')
+    return filepath, v
 
 def create_config_proto(params):
   """Returns session config proto.
