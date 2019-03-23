@@ -63,12 +63,12 @@ def main(positional_arguments):
   params = benchmark_cnn.make_params_from_flags()
 
   # TODO: Is it possible to attach a fast SSD disk instead of loading data everytime?
-  # print("INFO: Start copying data from the blob storage into local SSD")
-  # start = time.time()
-  # mox.file.copy_parallel(params.data_url, '/cache/data_dir')
-  # print("INFO: Complete copy! The copy task takes: " + str(time.time() - start) + " seconds")
-  # params.data_dir = '/cache/data_dir'
-  # params.train_dir = '/cache/train_dir'
+  print("INFO: Start copying data from the blob storage into local SSD")
+  start = time.time()
+  mox.file.copy_parallel(params.data_url, '/cache/data_dir')
+  print("INFO: Complete copy! The copy task takes: " + str(time.time() - start) + " seconds")
+  params.data_dir = '/cache/data_dir'
+  params.train_dir = '/cache/train_dir'
 
   params = benchmark_cnn.setup(params)
   bench = benchmark_cnn.BenchmarkCNN(params)
@@ -79,7 +79,7 @@ def main(positional_arguments):
   bench.print_info()
   bench.run()
 
-  # mox.file.copy_parallel('/cache/train_dir', params.train_url)
+  mox.file.copy_parallel('/cache/train_dir', params.train_url)
 
 
 if __name__ == '__main__':

@@ -35,7 +35,8 @@ RUN apt update && apt install -y --no-install-recommends \
         cuda-command-line-tools-9-0 \
         && rm -rf /var/lib/apt/lists/*
 
-# Install tensorflow-gpu 1.12.0
+# Install tensorflow-gpu 1.12.0 in the conda environment (pip has been redirected to conda pip)
+# RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple tensorflow-gpu==1.12.0 # Run this if in the mainland China
 RUN pip install tensorflow-gpu==1.12.0
 
 # Add the benchmark project
