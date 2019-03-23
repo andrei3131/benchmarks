@@ -20,20 +20,9 @@ See the README for more information.
 
 from __future__ import print_function
 
-# FIXME: Using Docker.
-import subprocess
-import sys
-
-def install(package):
-    subprocess.call([sys.executable, "-m", "pip", "install", package])
-
-install("tensorflow-gpu==1.12.0")
-# FIXME: END
-
 from absl import app
 from absl import flags as absl_flags
 import tensorflow as tf
-print("TensorFlow version: " + tf.VERSION)
 
 import benchmark_cnn
 import cnn_util
