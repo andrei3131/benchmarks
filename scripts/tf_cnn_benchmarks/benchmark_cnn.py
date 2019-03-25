@@ -931,6 +931,32 @@ def benchmark_one_step(sess,
             'text' if as_text else 'binary',
             os.path.join(path, graph_filename)))
         tf.train.write_graph(graph_def, path, graph_filename, as_text)
+  #
+  # Modified by Alexandros Koliousis on 25/3/2019
+  #
+  # Manually checkpoint model?
+  if params.checkpoint_manually:
+    if step >= 0 and (step == 0 or (step + 1) % checkpoint_interval == 0):
+      # Have we displayed statistics in this step?
+      if ((step + 1) % params.display_every != 0):
+        # Display statistics since we want to correlate them with evaluation results...
+        delta = time.time() - loop_start_time
+        log_str = '[%.3f]\t%i\t%i\t%s\t%.*f' % (
+          sum(step_train_times),
+          delta,
+          step + 1, get_perf_timing_str(batch_size, step_train_times),
+          LOSS_AND_ACCURACY_DIGITS_TO_SHOW, lossval)
+        if 'top_1_accuracy' in results:
+          log_str += '\t%.*f\t%.*f' % (
+            LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
+            LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
+        log_fn(log_str)
+        # Save the model checkpoint periodically
+        if not (saver and filepath):
+          raise ValueError("Undefined saver & filepath")
+        print("DBG> Checkpoint at step", (step + 1))
+        sys.stdout.flush()
+        saver.save(sess, filepath, global_step=(step + 1), write_state=False)
   return (summary_str, lossval)
 
 
