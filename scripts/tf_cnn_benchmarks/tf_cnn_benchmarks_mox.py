@@ -20,6 +20,7 @@ See the README for more information.
 
 from __future__ import print_function
 
+import os
 from absl import app
 from absl import flags as absl_flags
 import tensorflow as tf
@@ -51,13 +52,14 @@ def main(positional_arguments):
 
   params = benchmark_cnn.make_params_from_flags()
 
-  # TODO: Is it possible to attach a fast SSD disk instead of loading data everytime?
-  print("INFO: Start copying data from the blob storage into local SSD")
+  data_url = os.environ['DLS_DATA_URL']
+  train_url = os.environ['DLS_TRAIN_URL']
+  print('INFO: data_url: ' + data_url)
+  print('INFO: train_url: ' + train_url)
+  print('INFO: Start copying data from the blob storage into local SSD')
   start = time.time()
-  mox.file.copy_parallel(params.data_url, '/cache/data_dir')
-  print("INFO: Complete copy! The copy task takes: " + str(time.time() - start) + " seconds")
-  params.data_dir = '/cache/data_dir'
-  params.train_dir = '/cache/train_dir'
+  mox.file.copy_parallel(data_url, params.data_dir)
+  print('INFO: Complete copy! The copy task takes: ' + str(time.time() - start) + ' seconds')
 
   params = benchmark_cnn.setup(params)
   bench = benchmark_cnn.BenchmarkCNN(params)
@@ -68,7 +70,8 @@ def main(positional_arguments):
   bench.print_info()
   bench.run()
 
-  mox.file.copy_parallel('/cache/train_dir', params.train_url)
+  print('INFO: Copy checkpoints to ' + train_url)
+  mox.file.copy_parallel(params.train_dir, train_url)
 
 
 if __name__ == '__main__':
