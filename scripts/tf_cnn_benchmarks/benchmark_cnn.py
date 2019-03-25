@@ -32,6 +32,8 @@ import threading
 import time
 import traceback
 
+import sys
+
 from absl import flags as absl_flags
 import numpy as np
 
@@ -670,7 +672,7 @@ flags.DEFINE_string('benchmark_test_id', None,
 #
 flags.DEFINE_boolean('checkpoint_manually', True, '')
 flags.DEFINE_float  ('checkpoint_interval', 0, '')
-flags.DEFINE_string ('checkpoint_directory', None, '')
+flags.DEFINE_string ('checkpoint_directory', 'checkpoints', '')
 flags.DEFINE_integer('checkpoint_version',  1, '')
 
 platforms_util.define_platform_params()
@@ -833,10 +835,19 @@ def get_mode_from_params(params):
 LOSS_AND_ACCURACY_DIGITS_TO_SHOW = 3
 
 
+# 
+# Modified signature by Alexandros Koliousis:
+# 
+# global_start_time
+# saver
+# filepath
+# checkpoint_interval
+#
 def benchmark_one_step(sess,
                        fetches,
                        step,
                        batch_size,
+                       global_start_time,
                        step_train_times,
                        trace_filename,
                        partitioned_graph_file_prefix,
@@ -846,7 +857,10 @@ def benchmark_one_step(sess,
                        summary_op=None,
                        show_images_per_sec=True,
                        benchmark_logger=None,
-                       collective_graph_key=0):
+                       collective_graph_key=0,
+                       saver=None,
+                       filepath=None,
+                       checkpoint_interval=None):
   """Advance one step of benchmarking."""
   should_profile = profiler and 0 <= step < _NUM_STEPS_TO_PROFILE
   need_options_and_metadata = (
@@ -939,12 +953,13 @@ def benchmark_one_step(sess,
     if step >= 0 and (step == 0 or (step + 1) % checkpoint_interval == 0):
       # Have we displayed statistics in this step?
       if ((step + 1) % params.display_every != 0):
-        # Display statistics since we want to correlate them with evaluation results...
-        delta = time.time() - loop_start_time
+        # Display statistics since we want to correlate them with evaluation results
+        delta = time.time() - global_start_time
         log_str = '[%.3f]\t%i\t%i\t%s\t%.*f' % (
           sum(step_train_times),
           delta,
-          step + 1, get_perf_timing_str(batch_size, step_train_times),
+          step + 1, 
+          get_perf_timing_str(speed_mean, speed_uncertainty, speed_jitter),
           LOSS_AND_ACCURACY_DIGITS_TO_SHOW, lossval)
         if 'top_1_accuracy' in results:
           log_str += '\t%.*f\t%.*f' % (
@@ -1330,6 +1345,14 @@ class BenchmarkCNN(object):
                                                       self.params.data_name)
     self.model = model or model_config.get_model_config(
         self.params.model, self.dataset, self.params)
+
+    #
+    # Modified by Alexandros Koliousis
+    if not self.params.eval:
+        self.filepath, self.version = _checkpoint_path(params.checkpoint_directory,
+                params.checkpoint_version)
+        print("DBG>", "%s (v. %d)" % (self.filepath, self.version))
+
     self.trace_filename = self.params.trace_file
     self.rewriter_config = self.params.rewriter_config
     autotune_threshold = self.params.autotune_threshold if (
@@ -1614,6 +1637,19 @@ class BenchmarkCNN(object):
       if offset.is_integer():
         offset = int(offset)
       mlperf.logger.log(key=mlperf.tags.EVAL_EPOCH_OFFSET, value=offset)
+
+    #
+    # Modified by Alexandros Koliousis
+    #
+    print("DBG>", "Train for %d iterations or %d epochs" % (self.num_batches, self.num_epochs))
+    print("DBG>", "Approximately %d iterations per epoch" % (self.dataset.num_examples_per_epoch(subset) / self.batch_size))
+
+    self.checkpoint_interval = params.checkpoint_interval * (self.dataset.num_examples_per_epoch(subset) / self.batch_size)
+    print("DBG>", "Checkpoint every %d iterations" % self.checkpoint_interval)
+
+    if (self.params.checkpoint_manually and self.checkpoint_interval == 0):
+      raise ValueError("Undefined checkpoint interval")
+
 
     if (self.params.staged_vars and
         self.params.variable_update != 'parameter_server'):
@@ -2423,6 +2459,8 @@ class BenchmarkCNN(object):
     last_eval_step = local_step
     loop_start_time = time.time()
     last_average_loss = None
+    # akoliousis: log start time
+    global_start_time = time.time()
     while not done_fn():
       if local_step == 0:
         log_fn('Done warm up')
@@ -2448,14 +2486,28 @@ class BenchmarkCNN(object):
         fetch_summary = None
       collective_graph_key = 7 if (
           self.params.variable_update == 'collective_all_reduce') else 0
+      #
+      # Modified by Alexandros Koliousis
+      #
       (summary_str, last_average_loss) = benchmark_one_step(
-          sess, graph_info.fetches, local_step,
-          self.batch_size * (self.num_workers
-                             if self.single_session else 1), step_train_times,
-          self.trace_filename, self.params.partitioned_graph_file_prefix,
-          profiler, image_producer, self.params, fetch_summary,
+          sess, 
+          graph_info.fetches, 
+          local_step,
+          self.batch_size * (self.num_workers if self.single_session else 1),
+          global_start_time,
+          step_train_times,
+          self.trace_filename, 
+          self.params.partitioned_graph_file_prefix,
+          profiler, 
+          image_producer, 
+          self.params, 
+          fetch_summary,
           benchmark_logger=self.benchmark_logger,
-          collective_graph_key=collective_graph_key)
+          collective_graph_key=collective_graph_key,
+          saver=supervisor.saver,
+          filepath=self.filepath,
+          checkpoint_interval=self.checkpoint_interval)
+
       if summary_str is not None and is_chief:
         supervisor.summary_computed(sess, summary_str)
       local_step += 1
