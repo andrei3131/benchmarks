@@ -896,21 +896,35 @@ def benchmark_one_step(sess,
     lossval = 0.
   if image_producer is not None:
     image_producer.notify_image_consumption()
+
   train_time = time.time() - start_time
   step_train_times.append(train_time)
+
+  # Display statistics
   if (show_images_per_sec and step >= 0 and
       (step == 0 or (step + 1) % params.display_every == 0)):
+
     speed_mean, speed_uncertainty, speed_jitter = get_perf_timing(
         batch_size, step_train_times, params.display_perf_ewma)
-    log_str = '%i\t%s\t%.*f' % (
+
+    # Alexandros Koliousis (26 March 2019)
+    # Modify print-out a little bit...
+    delta = time.time() - global_start_time
+
+    log_str = '[%10.3f]\t%6i\t%7i\t%s\t%.*f' % (
+        sum(step_train_times),
+        delta,
         step + 1,
         get_perf_timing_str(speed_mean, speed_uncertainty, speed_jitter),
         LOSS_AND_ACCURACY_DIGITS_TO_SHOW, lossval)
+
     if 'top_1_accuracy' in results:
       log_str += '\t%.*f\t%.*f' % (
           LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
           LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
+
     log_fn(log_str)
+
     if benchmark_logger:
       benchmark_logger.log_metric(
           'current_examples_per_sec', speed_mean, global_step=step + 1)
@@ -962,7 +976,7 @@ def benchmark_one_step(sess,
       if ((step + 1) % params.display_every != 0):
         # Display statistics since we want to correlate them with evaluation results
         delta = time.time() - global_start_time
-        log_str = '[%.3f]\t%i\t%i\t%s\t%.*f' % (
+        log_str = '[%10.3f]\t%6i\t%7i\t%s\t%.*f' % (
           sum(step_train_times),
           delta,
           step + 1, 
@@ -979,6 +993,7 @@ def benchmark_one_step(sess,
       print("DBG> Checkpoint at step", (step + 1))
       sys.stdout.flush()
       saver.save(sess, filepath, global_step=(step + 1), write_state=False)
+
   return (summary_str, lossval)
 
 
@@ -2586,6 +2601,17 @@ class BenchmarkCNN(object):
       log_fn('-' * 64)
     else:
       log_fn('Done with training')
+
+    # Alexandros Koliousis (26 March 2019)
+    #
+    # Checkpoint one lsat time?
+    #
+    if not (supervisor.saver and self.filepath):
+        raise ValueError("Undefined saver")
+    print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
+    sys.stdout.flush()
+    supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
+    
     num_steps_since_last_eval = local_step - last_eval_step
     mlperf.logger.log(
         key=mlperf.tags.INPUT_SIZE,
