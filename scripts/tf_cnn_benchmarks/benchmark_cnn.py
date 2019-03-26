@@ -67,7 +67,7 @@ from tensorflow.python.util import nest
 _DEFAULT_NUM_BATCHES = 100
 
 #
-# Modified by Alexandros Koliousis (20/3/2019
+# Alexandros Koliousis (20 March 2019)
 #
 _DEBUG = False
 _DEBUG_TRAINING = False
@@ -666,11 +666,11 @@ flags.DEFINE_string('benchmark_test_id', None,
                     'system.')
 
 #
-# Modified by Alexandros Koliousis (19/3/2019)
+# (Alexandros Koliousis, 19 March 2019)
 #
-# Custom checkpointing variables
+# Add support for custom checkpointing.
 #
-flags.DEFINE_boolean('checkpoint_manually', True, '')
+flags.DEFINE_boolean('checkpoint_every_n_epochs', True, '')
 flags.DEFINE_float  ('checkpoint_interval', 0, '')
 flags.DEFINE_string ('checkpoint_directory', 'checkpoints', '')
 flags.DEFINE_integer('checkpoint_version',  1, '')
@@ -730,7 +730,9 @@ class CheckpointNotFoundException(Exception):
   pass
 
 #
-# Modified by Alexandros Koliousis (20/3/2019)
+# Alexandros Koliousis (20 March 2019)
+#
+# Create custom checkpoint directory.
 #
 def _checkpoint_path(root, version):
     v = version
@@ -836,12 +838,13 @@ LOSS_AND_ACCURACY_DIGITS_TO_SHOW = 3
 
 
 # 
-# Modified signature by Alexandros Koliousis:
+# Alexandros Koliousis (25 March 2019)
 # 
-# global_start_time
-# saver
-# filepath
-# checkpoint_interval
+# Modify function signature to include:
+# a) global_start_time
+# b) saver
+# c) filepath
+# d) checkpoint_interval
 #
 def benchmark_one_step(sess,
                        fetches,
@@ -946,11 +949,15 @@ def benchmark_one_step(sess,
             os.path.join(path, graph_filename)))
         tf.train.write_graph(graph_def, path, graph_filename, as_text)
   #
-  # Modified by Alexandros Koliousis on 25/3/2019
+  # Alexandros Koliousis (25 March 2019)
   #
-  # Manually checkpoint model?
-  if params.checkpoint_manually:
-    if step >= 0 and (step == 0 or (step + 1) % checkpoint_interval == 0):
+  # Checkpoint model every N steps
+  #
+  if params.checkpoint_every_n_epochs:
+    # print("DBG> Try checkpoint at %d/%d steps" % (step, checkpoint_interval))
+    if (step >= 0 and (step == 0 or (step + 1) % checkpoint_interval == 0)):
+      # print("DBG>", "%d/%d" % (step, checkpoint_interval))
+      sys.stdout.flush()
       # Have we displayed statistics in this step?
       if ((step + 1) % params.display_every != 0):
         # Display statistics since we want to correlate them with evaluation results
@@ -966,12 +973,12 @@ def benchmark_one_step(sess,
             LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
             LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
         log_fn(log_str)
-        # Save the model checkpoint periodically
-        if not (saver and filepath):
-          raise ValueError("Undefined saver & filepath")
-        print("DBG> Checkpoint at step", (step + 1))
-        sys.stdout.flush()
-        saver.save(sess, filepath, global_step=(step + 1), write_state=False)
+      # Save the model checkpoint periodically
+      if not (saver and filepath):
+        raise ValueError("Undefined saver & filepath")
+      print("DBG> Checkpoint at step", (step + 1))
+      sys.stdout.flush()
+      saver.save(sess, filepath, global_step=(step + 1), write_state=False)
   return (summary_str, lossval)
 
 
@@ -1347,7 +1354,9 @@ class BenchmarkCNN(object):
         self.params.model, self.dataset, self.params)
 
     #
-    # Modified by Alexandros Koliousis
+    # Alexandros Koliousis (25 March 2019)
+    #
+    # Create checkpoint directory
     if not self.params.eval:
         self.filepath, self.version = _checkpoint_path(params.checkpoint_directory,
                 params.checkpoint_version)
@@ -1639,15 +1648,15 @@ class BenchmarkCNN(object):
       mlperf.logger.log(key=mlperf.tags.EVAL_EPOCH_OFFSET, value=offset)
 
     #
-    # Modified by Alexandros Koliousis
+    # Alexandros Koliousis (25 March 2019)
     #
     print("DBG>", "Train for %d iterations or %d epochs" % (self.num_batches, self.num_epochs))
     print("DBG>", "Approximately %d iterations per epoch" % (self.dataset.num_examples_per_epoch(subset) / self.batch_size))
 
-    self.checkpoint_interval = params.checkpoint_interval * (self.dataset.num_examples_per_epoch(subset) / self.batch_size)
+    self.checkpoint_interval = int(params.checkpoint_interval * (self.dataset.num_examples_per_epoch(subset) / self.batch_size))
     print("DBG>", "Checkpoint every %d iterations" % self.checkpoint_interval)
 
-    if (self.params.checkpoint_manually and self.checkpoint_interval == 0):
+    if (self.params.checkpoint_every_n_epochs and self.checkpoint_interval == 0):
       raise ValueError("Undefined checkpoint interval")
 
 
@@ -2487,7 +2496,7 @@ class BenchmarkCNN(object):
       collective_graph_key = 7 if (
           self.params.variable_update == 'collective_all_reduce') else 0
       #
-      # Modified by Alexandros Koliousis
+      # Alexandros Koliousis (25 March 2019)
       #
       (summary_str, last_average_loss) = benchmark_one_step(
           sess, 

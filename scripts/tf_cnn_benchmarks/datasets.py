@@ -190,7 +190,7 @@ class Cifar10Dataset(ImageDataset):
 
 
 #
-# Added by Alexandros Koliousis on 25/3/2019
+# Alexandros Koliousis (25 March 2019)
 #
 class Cifar100Dataset(ImageDataset):
   """Configuration for cifar 100 dataset.
@@ -268,7 +268,7 @@ _SUPPORTED_DATASETS = {
 }
 
 #
-# Modified by Alexandros Koliousis on 25/3/2019
+# Alexandros Koliousis (25 March 2019)
 #
 _SUPPORTED_INPUT_PREPROCESSORS = {
     'imagenet': {
