@@ -2611,7 +2611,7 @@ class BenchmarkCNN(object):
     print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
     sys.stdout.flush()
     supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
-    
+
     num_steps_since_last_eval = local_step - last_eval_step
     mlperf.logger.log(
         key=mlperf.tags.INPUT_SIZE,
