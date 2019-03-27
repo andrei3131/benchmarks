@@ -924,6 +924,7 @@ def benchmark_one_step(sess,
           LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
 
     log_fn(log_str)
+    sys.stdout.flush()
 
     if benchmark_logger:
       benchmark_logger.log_metric(
@@ -975,7 +976,11 @@ def benchmark_one_step(sess,
       # Have we displayed statistics in this step?
       if ((step + 1) % params.display_every != 0):
         # Display statistics since we want to correlate them with evaluation results
+        speed_mean, speed_uncertainty, speed_jitter = get_perf_timing(
+          batch_size, step_train_times, params.display_perf_ewma)
+        
         delta = time.time() - global_start_time
+        
         log_str = '[%10.3f]\t%6i\t%7i\t%s\t%.*f' % (
           sum(step_train_times),
           delta,
