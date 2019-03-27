@@ -904,7 +904,7 @@ class Cifar10ImagePreprocessor(BaseImagePreprocessor):
 
 
 class Cifar100ImagePreprocessor(BaseImagePreprocessor):
-  """Preprocessor for Cifar10 input images."""
+  """Preprocessor for Cifar100 input images."""
 
   def _distort_image(self, image):
     """Distort one image for training a network.

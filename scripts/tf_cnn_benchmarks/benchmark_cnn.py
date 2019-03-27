@@ -2081,6 +2081,99 @@ class BenchmarkCNN(object):
             image_producer.notify_image_consumption()
       return image_producer
 
+  def _eval_checkpoint(self,
+                       saver,
+                       summary_writer,
+                       target,
+                       local_var_init_op_group,
+                       image_producer_ops,
+                       enqueue_ops,
+                       fetches,
+                       summary_op,
+                       checkpoint,
+                       global_step):
+
+      """Evaluate the model from a checkpoint using validation dataset."""
+      with tf.Session(
+              target=target,
+              config=create_config_proto(self.params)) as sess:
+
+          # Load specific checkpoint
+          try:
+              saver.restore(sess, checkpoint)
+          except:
+              tf.logging.info('Failed to load checkpoint %s', checkpoint)
+              sys.exit(1)
+
+          sess.run(local_var_init_op_group)
+          if self.dataset.queue_runner_required():
+              tf.train.start_queue_runners(sess=sess)
+          image_producer = cnn_util.ImageProducer(sess, image_producer_ops,
+                                                  self.batch_group_size,
+                                                  self.params.use_python32_barrier)
+          image_producer.start()
+          for i in xrange(len(enqueue_ops)):
+              sess.run(enqueue_ops[:(i + 1)])
+              image_producer.notify_image_consumption()
+          loop_start_time = start_time = time.time()
+          top_1_accuracy_sum = 0.0
+          top_5_accuracy_sum = 0.0
+          total_eval_count = self.num_batches * self.batch_size
+          _all_imgs = []
+          _all_lbls = []
+          if _DEBUG_TEST:
+              print("DBG> %d batches %d images/batch %d images" % (self.num_batches, self.batch_size, total_eval_count))
+          for step in xrange(self.num_batches):
+              if (self.params.save_summaries_steps > 0 and
+                      (step + 1) % self.params.save_summaries_steps == 0):
+                  results, summary_str = sess.run([fetches, summary_op])
+                  summary_writer.add_summary(summary_str)
+              else:
+                  results = sess.run(fetches)
+              top_1_accuracy_sum += results['top_1_accuracy']
+              top_5_accuracy_sum += results['top_5_accuracy']
+              if _DEBUG_TEST:
+                  # Get list of image (label) checksums for batch
+                  imgs = results['img_checksums']
+                  lbls = results['lbl_checksums']
+                  print("DBG> Finished step %d: %d images %d labels" % (step, len(imgs), len(lbls)))
+                  # for i in xrange(len(imgs)):
+                  #     print("%2d: %+7d %+6d" % (i, imgs[i], lbls[i]))
+                  _all_imgs = _all_imgs + imgs
+                  _all_lbls = _all_lbls + lbls
+              if (step + 1) % self.params.display_every == 0:
+                  duration = time.time() - start_time
+                  examples_per_sec = (
+                          self.batch_size * self.params.display_every / duration)
+                  log_fn('%i\t%.1f examples/sec' % (step + 1, examples_per_sec))
+                  start_time = time.time()
+              image_producer.notify_image_consumption()
+          loop_end_time = time.time()
+          image_producer.done()
+          accuracy_at_1 = top_1_accuracy_sum / self.num_batches
+          accuracy_at_5 = top_5_accuracy_sum / self.num_batches
+          summary = tf.Summary()
+          summary.value.add(tag='eval/Accuracy@1', simple_value=accuracy_at_1)
+          summary.value.add(tag='eval/Accuracy@5', simple_value=accuracy_at_5)
+          summary_writer.add_summary(summary, global_step)
+          log_fn('%i\tAccuracy @ 1 = %.4f Accuracy @ 5 = %.4f [%d examples]' %
+                 (global_step, accuracy_at_1, accuracy_at_5, total_eval_count))
+          elapsed_time = loop_end_time - loop_start_time
+          images_per_sec = (self.num_batches * self.batch_size / elapsed_time)
+          # Note that we compute the top 1 accuracy and top 5 accuracy for each
+          # batch, which will have a slight performance impact.
+          log_fn('-' * 64)
+          log_fn('total images/sec: %.2f' % images_per_sec)
+          log_fn('-' * 64)
+          if _DEBUG_TEST:
+              print("DBG> Finished: %d images %d labels" % (len(_all_imgs), len(_all_lbls)))
+              # Zip, sort, and dump
+              z = sorted(zip(_all_lbls, _all_imgs))
+              _ndx = 0
+              for lbl, img in z:
+                  print("%5d: %+7d %+7d" % (_ndx, lbl, img))
+                  _ndx += 1
+
   def _eval_once(self, sess, summary_writer, fetches, summary_op,
                  image_producer, global_step):
     """Evaluate the model using the validation dataset."""
