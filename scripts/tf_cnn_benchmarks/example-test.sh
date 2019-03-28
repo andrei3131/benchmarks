@@ -20,7 +20,8 @@ NAME="imagenet"
 # Synthetic data
 DATADIR=""
 # TF record data
-DATADIR="/mnt/LSDSDataShare/projects/16-crossbow/platypus2/data/tf/imagenet/records"
+# DATADIR="/mnt/LSDSDataShare/projects/16-crossbow/platypus2/data/tf/imagenet/records"
+DATADIR="/fast/imagenet/validation"
 
 # Only one of the two must be set
 EPOCHS=1
@@ -42,7 +43,7 @@ FLAGS="${FLAGS} --tf_random_seed=1234"
 #
 # CPU/GPU configuration
 #
-NGPU=4
+NGPU=8
 
 FLAGS="${FLAGS} --num_gpus=${NGPU}"
 
@@ -89,6 +90,9 @@ FLAGS="${FLAGS} --checkpoint_interval=${CHECKPOINT_INTERVAL}"
 FLAGS="${FLAGS} --checkpoint_directory=${CHECKPOINT_DIRECTORY}"
 
 FLAGS="${FLAGS} --data_format=NCHW"
+
+# AttributeError: '_ThreadPoolDataset' object has no attribute 'make_initializable_iterator'
+FLAGS="${FLAGS} --use_datasets=False"
 
 # Run.
 #

@@ -2051,7 +2051,9 @@ class BenchmarkCNN(object):
                         info.summary_op,
                         image_producer,
                         step)
-
+        
+        image_producer.done()
+        
         if _DEBUG_TEST:
           print("DBG> Exit after 1 test")
           break
@@ -2184,6 +2186,8 @@ class BenchmarkCNN(object):
         summary_writer.add_summary(summary, global_step)
       log_fn('Accuracy @ 1 = %.4f Accuracy @ 5 = %.4f [%d examples]' %
              (accuracy_at_1, accuracy_at_5, total_eval_count))
+      # Flush
+      sys.stdout.flush()
       elapsed_time = loop_end_time - loop_start_time
       images_per_sec = (self.num_batches * self.batch_size / elapsed_time)
       if self.mode != constants.BenchmarkMode.TRAIN_AND_EVAL:
