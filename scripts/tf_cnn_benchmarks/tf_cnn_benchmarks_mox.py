@@ -20,7 +20,6 @@ See the README for more information.
 
 from __future__ import print_function
 
-import os
 from absl import app
 from absl import flags as absl_flags
 import tensorflow as tf
@@ -33,6 +32,7 @@ from cnn_util import log_fn
 # Import Huawei modelarts utils
 import moxing as mox
 import time
+import os
 
 
 flags.define_flags()
@@ -50,12 +50,31 @@ def main(positional_arguments):
     raise ValueError('Received unknown positional arguments: %s'
                      % positional_arguments[1:])
 
+  # START
+  data_url = os.environ['DLS_DATA_URL']
+  print('INFO: data_url: ' + data_url)
+  train_url = os.environ['DLS_TRAIN_URL']
+  print('INFO: train_url: ' + train_url)
+  task_index = int(os.environ['DLS_TASK_INDEX'])
+  print('INFO: task_index: ' + str(task_index))
+  n_tasks = int(os.environ['DLS_TASK_NUMBER'])
+  print('INFO: n_tasks: ' + str(n_tasks))
+  for i in range(0, n_tasks):
+    host = os.environ['BATCH_CUSTOM' + str(i) +'_HOSTS']
+    if i == 0:
+      hosts = host
+    else:
+      hosts = hosts + ',' + host
+  print('INFO: hosts: ' + hosts)
+
+  absl_flags.FLAGS.worker_hosts = hosts
+  absl_flags.FLAGS.task_index = task_index
+  absl_flags.FLAGS.data_dir = '/cache/data_dir'
+  absl_flags.FLAGS.train_dir = '/cache/train_dir'
+  # END
+  
   params = benchmark_cnn.make_params_from_flags()
 
-  data_url = os.environ['DLS_DATA_URL']
-  train_url = os.environ['DLS_TRAIN_URL']
-  print('INFO: data_url: ' + data_url)
-  print('INFO: train_url: ' + train_url)
   print('INFO: Start copying data from the blob storage into local SSD')
   start = time.time()
   mox.file.copy_parallel(data_url, params.data_dir)
