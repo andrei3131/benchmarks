@@ -735,6 +735,7 @@ class RecordInputImagePreprocessor(BaseImagePreprocessor):
       images = [[] for _ in range(self.num_splits)]
       labels = [[] for _ in range(self.num_splits)]
       if params.use_datasets:
+        print("DBG> Use datasets")
         ds = self.create_dataset(
             self.batch_size, self.num_splits, self.batch_size_per_split,
             dataset, subset, self.train,
@@ -754,6 +755,7 @@ class RecordInputImagePreprocessor(BaseImagePreprocessor):
       # TODO(laigd): consider removing the --use_datasets option, it should
       # always use datasets.
       else:
+        print("DBG> Don't use datasets")
         record_input = data_flow_ops.RecordInput(
             file_pattern=dataset.tf_record_pattern(subset),
             seed=301,
