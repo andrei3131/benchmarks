@@ -26,8 +26,6 @@ RUN apt-get update && \
         python3-dev \
         python3-pip \
         python3-setuptools 
-       # \ <newline> cmake
-
 
 # Install TensorFlow
 RUN pip3 install tensorflow-gpu==1.12.0
@@ -53,13 +51,6 @@ ENV PATH=${PATH}:/usr/local/go/bin
 
 # Add the KungFu sources
 ADD ./KungFu /KungFu
-
-# Install KungFu
-#RUN cd KungFu && \
-#    ldconfig /usr/local/cuda-9.0/targets/x86_64-linux/lib/lib && \
-#    env KUNGFU_USE_NCCL=1 pip3 install --no-index --user -U . && \
-#    ldconfig && \
-#    ./scripts/go-install.sh
 
 # Add the benchmark project
 ADD . /benchmarks
