@@ -60,8 +60,7 @@ from tensorflow.python.platform import gfile
 from tensorflow.python.util import nest
 
 
-_DEFAULT_NUM_BATCHES = 200
-
+_DEFAULT_NUM_BATCHES = 100
 
 # GraphInfo encapsulates the tensors/ops that we care about after building a
 # graph. We use them to benchmark the graph.
@@ -158,10 +157,7 @@ flags.DEFINE_boolean('print_training_accuracy', False,
                      'whether to calculate and print training accuracy during '
                      'training')
 flags.DEFINE_integer('batch_size', 0, 'batch size per compute device')
-
-
 flags.DEFINE_integer('ako_partitions', 1, 'number of Ako partitions')
-
 flags.DEFINE_integer('batch_group_size', 1,
                      'number of groups of batches processed in the image '
                      'producer.')
@@ -3161,11 +3157,8 @@ class BenchmarkCNN(object):
         grads = [hvd.allreduce(grad, average=False, device_dense=horovod_device)
                  for grad in grads]
       elif self.params.variable_update == 'kungfu':
-        #from kungfu.ops import cpu_group_all_reduce
         from kungfu.ops import kungfu_strategy_negotiate
         grads = kungfu_strategy_negotiate(grads, strategy='ako', num_partitions=self.params.ako_partitions)
-        # from kungfu.ops import cpu_group_all_reduce
-        #grads = cpu_group_all_reduce(grads)
 
       if self.params.staged_vars:
         grad_dtypes = [grad.dtype for grad in grads]

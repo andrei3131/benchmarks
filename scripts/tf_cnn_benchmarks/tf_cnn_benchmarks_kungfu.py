@@ -47,6 +47,7 @@ def main(positional_arguments):
                      % positional_arguments[1:])
 
   params = benchmark_cnn_kungfu.make_params_from_flags()
+  
   params = benchmark_cnn_kungfu.setup(params)
   bench = benchmark_cnn_kungfu.BenchmarkCNN(params)
 
@@ -54,8 +55,6 @@ def main(positional_arguments):
   log_fn('TensorFlow:  %i.%i' % (tfversion[0], tfversion[1]))
 
   bench.print_info()
-
-  print(tf.trainable_variables())
 
   bench.run()
 
