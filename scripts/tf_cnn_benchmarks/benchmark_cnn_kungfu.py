@@ -157,7 +157,12 @@ flags.DEFINE_boolean('print_training_accuracy', False,
                      'whether to calculate and print training accuracy during '
                      'training')
 flags.DEFINE_integer('batch_size', 0, 'batch size per compute device')
+
+# Ako
 flags.DEFINE_integer('ako_partitions', 1, 'number of Ako partitions')
+flags.DEFINE_string('kungfu_strategy', 'parallel',
+		    'Name of KungFu strategy: parallel or ako. If not specified, default is ako')
+
 flags.DEFINE_integer('batch_group_size', 1,
                      'number of groups of batches processed in the image '
                      'producer.')
@@ -3158,7 +3163,7 @@ class BenchmarkCNN(object):
                  for grad in grads]
       elif self.params.variable_update == 'kungfu':
         from kungfu.ops import kungfu_strategy_negotiate
-        grads = kungfu_strategy_negotiate(grads, strategy='ako', num_partitions=self.params.ako_partitions)
+        grads = kungfu_strategy_negotiate(grads, strategy=self.params.kungfu_strategy, num_partitions=self.params.ako_partitions)
 
       if self.params.staged_vars:
         grad_dtypes = [grad.dtype for grad in grads]
