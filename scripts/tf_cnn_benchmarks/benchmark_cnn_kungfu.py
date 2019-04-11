@@ -3160,10 +3160,20 @@ class BenchmarkCNN(object):
           horovod_device = ''
         # All-reduce gradients using Horovod.
         grads = [hvd.allreduce(grad, average=False, device_dense=horovod_device)
-                 for grad in grads]
-      elif self.params.variable_update == 'kungfu':
-        from kungfu.ops import kungfu_strategy_negotiate
-        grads = kungfu_strategy_negotiate(grads, strategy=self.params.kungfu_strategy, num_partitions=self.params.ako_partitions)
+                for grad in grads]
+
+      if self.params.variable_update == 'kungfu':
+        if self.params.kungfu_strategy == "ako":
+          from kungfu.ops import ako_group_all_reduce
+          grads = ako_group_all_reduce(grads, num_partitions=self.params.ako_partitions)
+        elif self.params.kungfu_strategy == "cpu_all_reduce":
+          from kungfu.ops import cpu_group_all_reduce
+          grads = cpu_group_all_reduce(grads)
+        elif self.params.kungfu_strategy == "nccl_all_reduce":
+          from kungfu.ops import gpu_group_all_reduce
+          grads = gpu_group_all_reduce(grads)
+        else:
+          raise Exception('Unknown kungfu strategy.')
 
       if self.params.staged_vars:
         grad_dtypes = [grad.dtype for grad in grads]

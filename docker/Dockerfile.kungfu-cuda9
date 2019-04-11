@@ -5,6 +5,7 @@ FROM nvidia/cuda:9.0-base-ubuntu16.04
 RUN apt-get update && \
         apt-get install -y --allow-downgrades --allow-change-held-packages --no-install-recommends \
         build-essential \
+        cmake \
         wget \
         git \
         curl \
@@ -17,8 +18,8 @@ RUN apt-get update && \
         cuda-cusolver-9-0 \
         cuda-cusparse-9-0 \
         libcudnn7=7.2.1.38-1+cuda9.0 \
-        libnccl2=2.2.13-1+cuda9.0 \
-        libnccl-dev=2.2.13-1+cuda9.0 \
+        libnccl2=2.4.2-1+cuda9.0 \
+        libnccl-dev=2.4.2-1+cuda9.0 \
         cuda-command-line-tools-9-0 \
         libjpeg-dev \
         libpng-dev \
@@ -29,13 +30,6 @@ RUN apt-get update && \
 
 # Install TensorFlow
 RUN pip3 install tensorflow-gpu==1.12.0
-
-RUN wget https://github.com/Kitware/CMake/releases/download/v3.14.1/cmake-3.14.1.tar.gz && \
-    tar -xzvf cmake-3.14.1.tar.gz && \
-    cd cmake-3.14.1 && \
-    ./bootstrap && \
-    make -j8 && \
-    make install
 
 # Install gtest
 RUN cd /usr/src/gtest && \
@@ -51,6 +45,13 @@ ENV PATH=${PATH}:/usr/local/go/bin
 
 # Add the KungFu sources
 ADD ./KungFu /KungFu
+
+# Install KungFu
+RUN cd KungFu && \
+        ldconfig /usr/local/cuda-9.0/targets/x86_64-linux/lib/stubs && \
+        env KUNGFU_USE_NCCL=1 pip3 install --no-index --user -U . && \
+        ldconfig && \
+        ./scripts/go-install.sh
 
 # Add the benchmark project
 ADD . /benchmarks
