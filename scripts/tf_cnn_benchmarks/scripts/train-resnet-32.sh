@@ -2,6 +2,17 @@
 #
 # Benchmark(s) for TensorFlow.
 #
+PROFILE=0
+
+NVPROFEXEC=/usr/local/cuda/bin/nvprof
+NVPROFOPTS="-o profiler.nvvp"
+if [ $PROFILE -gt 1 ]; then
+	#
+	# Detailed profiling looks into SM occupancy and activity.
+	# Run only 1 batch on 1 GPU.
+	#
+	NVPROFOPTS=${NVPROFOPTS}" --metrics achieved_occupancy,sm_activity"
+fi
 
 # Batch size (per GPU)
 B=32
@@ -17,7 +28,6 @@ V="0"
 # G=$2
 # S=$3
 
-printf "Train ResNet32 v.%s with batch size %4d on %d GPU devices\n" $V $B $G
 
 FLAGS=
 
@@ -35,7 +45,7 @@ DATADIR="datasets/cifar-10/batches"
 # TF record data
 # DATADIR="datasets/cifar-10"
 
-EPOCHS=160
+EPOCHS=1 # 160
 
 MOMENTUM=0.9
 DECAY="0.0001"
@@ -62,7 +72,14 @@ FLAGS=${FLAGS}" --data_name=${DATASET}"
 
 [ -n "${DATADIR}" ] && FLAGS=${FLAGS}" --data_dir=${DATADIR}"
 
-FLAGS=${FLAGS}" --num_epochs=${EPOCHS}"
+#if [ $PROFILE -gt 1 ]; then
+#	# When profiling SM activity,
+#	# run only 1 batch.
+#	FLAGS=${FLAGS}" --num_batches=1"
+#else
+#	FLAGS=${FLAGS}" --num_epochs=${EPOCHS}"
+#fi
+FLAGS=${FLAGS}" --num_batches=1"
 
 # Run benchmark in training mode
 FLAGS=${FLAGS}" --eval=False --forward_only=False"
@@ -74,6 +91,11 @@ FLAGS=${FLAGS}" --print_training_accuracy=True"
 FLAGS=${FLAGS}" --tf_random_seed=123456789"
 
 # CPU/GPU configuration
+if [ $PROFILE -gt 1 ]; then
+	# Overide configuration
+	G=1
+fi
+G=1
 FLAGS=${FLAGS}" --num_gpus=$G --gpu_thread_mode=gpu_private"
 
 # No warm-up
@@ -120,5 +142,25 @@ FLAGS=${FLAGS}" --use_tf_layers=True"
 FLAGS=${FLAGS}" --winograd_nonfused=True"
 
 # Run
+printf "Train ResNet32 v.%s with batch size %4d on %d GPU devices\n" $V $B $G
 #
-python tf_cnn_benchmarks.py $FLAGS # > results/resnet-32-b-$B-g-$G.out
+if [ $PROFILE -gt 0 ]; then
+	# Check if profiler is available
+	which $NVPROFEXEC >/dev/null 2>&1
+	if [ $? -eq 1 ]; then
+		echo "error: $NVPROF not found"
+		exit 1
+	fi
+	# Print useful info
+	echo -n "Profiler mode: "
+	if [ $PROFILE -gt 1 ]; then
+		echo "Run 1 batch on 1 GPU"
+	else
+		echo "Train for $EPOCHS epochs"
+	fi
+	
+	echo "$NVPROFEXEC $NVPROFOPTS python tf_cnn_benchmarks.py $FLAGS"
+	$NVPROFEXEC $NVPROFOPTS python tf_cnn_benchmarks.py $FLAGS # > results/resnet-32-b-$B-g-$G.out
+else
+	python tf_cnn_benchmarks.py $FLAGS # > results/resnet-32-b-$B-g-$G.out
+fi
