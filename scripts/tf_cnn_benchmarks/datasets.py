@@ -189,6 +189,61 @@ class Cifar10Dataset(ImageDataset):
       raise ValueError('Invalid data subset "%s"' % subset)
 
 
+#
+# Alexandros Koliousis (25 March 2019)
+#
+class Cifar100Dataset(ImageDataset):
+  """Configuration for cifar 100 dataset.
+
+  It will mount all the input images to memory.
+  """
+
+  def __init__(self, data_dir=None):
+    super(Cifar10Dataset, self).__init__(
+        'cifar100',
+        32,
+        32,
+        data_dir=data_dir,
+        queue_runner_required=True,
+        num_classes=11)
+
+  def read_data_files(self, subset='train'):
+    """Reads from data file and returns images and labels in a numpy array."""
+    assert self.data_dir, ('Cannot call `read_data_files` when using synthetic '
+                           'data')
+    if subset == 'train':
+      filenames = [
+          os.path.join(self.data_dir, 'data_batch_%d' % i)
+          for i in xrange(1, 6)
+      ]
+    elif subset == 'validation':
+      filenames = [os.path.join(self.data_dir, 'test_batch')]
+    else:
+      raise ValueError('Invalid data subset "%s"' % subset)
+
+    inputs = []
+    for filename in filenames:
+      with gfile.Open(filename, 'rb') as f:
+        # python2 does not have the encoding parameter
+        encoding = {} if six.PY2 else {'encoding': 'bytes'}
+        inputs.append(cPickle.load(f, **encoding))
+    # See http://www.cs.toronto.edu/~kriz/cifar.html for a description of the
+    # input format.
+    all_images = np.concatenate(
+        [each_input[b'data'] for each_input in inputs]).astype(np.float32)
+    all_labels = np.concatenate(
+        [each_input[b'labels'] for each_input in inputs])
+    return all_images, all_labels
+
+  def num_examples_per_epoch(self, subset='train'):
+    if subset == 'train':
+      return 50000
+    elif subset == 'validation':
+      return 10000
+    else:
+      raise ValueError('Invalid data subset "%s"' % subset)
+
+
 class COCODataset(ImageDataset):
   """COnfiguration for COCO dataset."""
 
@@ -212,6 +267,9 @@ _SUPPORTED_DATASETS = {
     'coco': COCODataset,
 }
 
+#
+# Alexandros Koliousis (25 March 2019)
+#
 _SUPPORTED_INPUT_PREPROCESSORS = {
     'imagenet': {
         'default': preprocessing.RecordInputImagePreprocessor,
@@ -219,6 +277,9 @@ _SUPPORTED_INPUT_PREPROCESSORS = {
     },
     'cifar10': {
         'default': preprocessing.Cifar10ImagePreprocessor
+    },
+    'cifar100': {
+        'default': preprocessing.Cifar100ImagePreprocessor
     },
     'librispeech': {
         'default': preprocessing.LibrispeechPreprocessor

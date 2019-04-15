@@ -32,8 +32,6 @@ import threading
 import time
 import traceback
 
-import sys
-
 from absl import flags as absl_flags
 import numpy as np
 
@@ -66,12 +64,6 @@ from tensorflow.python.util import nest
 
 _DEFAULT_NUM_BATCHES = 100
 
-#
-# Alexandros Koliousis (20 March 2019)
-#
-_DEBUG = False
-_DEBUG_TRAINING = False
-_DEBUG_TEST = False
 
 # GraphInfo encapsulates the tensors/ops that we care about after building a
 # graph. We use them to benchmark the graph.
@@ -372,13 +364,6 @@ flags.DEFINE_float('gpu_memory_frac_for_testing', 0,
 flags.DEFINE_boolean('use_unified_memory', None,
                      'If True, allocate unified memory enabling larger models '
                      'to fit in available device RAM.')
-flags.DEFINE_boolean('timestamped_allocator', False,
-                     'If True marks free BFCAllocator::Chunks with time '
-                     'at which they are freed which can allow more efficient '
-                     'memory allocation in cases like RDMA networking.')
-flags.DEFINE_integer('gpu_pending_cap', 0, 'If > 0 then then number of pending '
-                     '(queued but not yet known to have terminated) kernels '
-                     'per GPU device will be capped to this number.')
 flags.DEFINE_boolean('use_tf_layers', True,
                      'If True, use tf.layers for neural network layers. This '
                      'should not affect performance or accuracy in any way.')
@@ -672,16 +657,6 @@ flags.DEFINE_string('benchmark_test_id', None,
                     'consumption, and does not have any impact within the '
                     'system.')
 
-#
-# (Alexandros Koliousis, 19 March 2019)
-#
-# Add support for custom checkpointing.
-#
-flags.DEFINE_boolean('checkpoint_every_n_epochs', True, '')
-flags.DEFINE_float  ('checkpoint_interval', 0, '')
-flags.DEFINE_string ('checkpoint_directory', 'checkpoints', '')
-flags.DEFINE_integer('checkpoint_version',  1, '')
-
 platforms_util.define_platform_params()
 
 
@@ -736,23 +711,6 @@ class GlobalStepWatcher(threading.Thread):
 class CheckpointNotFoundException(Exception):
   pass
 
-#
-# Alexandros Koliousis (20 March 2019)
-#
-# Create custom checkpoint directory.
-#
-def _checkpoint_path(root, version):
-    v = version
-    while True:
-        directory = os.path.join(root, ('v-%06d' % (v)))
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-            break
-        # Increment version and try again
-        v += 1
-
-    filepath = os.path.join(directory, 'model.ckpt')
-    return filepath, v
 
 def create_config_proto(params):
   """Returns session config proto.
@@ -784,18 +742,12 @@ def create_config_proto(params):
   if params.use_unified_memory:
     config.gpu_options.experimental.use_unified_memory = (
         params.use_unified_memory)
-  if params.timestamped_allocator:
-    config.gpu_options.experimental.timestamped_allocator = (
-        params.timestamped_allocator)
-  if params.gpu_pending_cap > 0:
-    config.gpu_options.experimental.pending_cap = params.gpu_pending_cap
   if params.xla:
     config.graph_options.optimizer_options.global_jit_level = (
         tf.OptimizerOptions.ON_1)
   if params.rewriter_config:
     rewriter_config = rewriter_config_pb2.RewriterConfig()
     text_format.Merge(params.rewriter_config, rewriter_config)
-    config.graph_options.rewrite_options.CopyFrom(rewriter_config)
   elif not params.enable_optimizations:
     config.graph_options.optimizer_options.opt_level = tf.OptimizerOptions.L0
     config.graph_options.rewrite_options.disable_meta_optimizer = True
@@ -850,20 +802,10 @@ def get_mode_from_params(params):
 LOSS_AND_ACCURACY_DIGITS_TO_SHOW = 3
 
 
-# 
-# Alexandros Koliousis (25 March 2019)
-# 
-# Modify function signature to include:
-# a) global_start_time
-# b) saver
-# c) filepath
-# d) checkpoint_interval
-#
 def benchmark_one_step(sess,
                        fetches,
                        step,
                        batch_size,
-                       global_start_time,
                        step_train_times,
                        trace_filename,
                        partitioned_graph_file_prefix,
@@ -873,10 +815,7 @@ def benchmark_one_step(sess,
                        summary_op=None,
                        show_images_per_sec=True,
                        benchmark_logger=None,
-                       collective_graph_key=0,
-                       saver=None,
-                       filepath=None,
-                       checkpoint_interval=None):
+                       collective_graph_key=0):
   """Advance one step of benchmarking."""
   should_profile = profiler and 0 <= step < _NUM_STEPS_TO_PROFILE
   need_options_and_metadata = (
@@ -909,36 +848,21 @@ def benchmark_one_step(sess,
     lossval = 0.
   if image_producer is not None:
     image_producer.notify_image_consumption()
-
   train_time = time.time() - start_time
   step_train_times.append(train_time)
-
-  # Display statistics
   if (show_images_per_sec and step >= 0 and
       (step == 0 or (step + 1) % params.display_every == 0)):
-
     speed_mean, speed_uncertainty, speed_jitter = get_perf_timing(
         batch_size, step_train_times, params.display_perf_ewma)
-
-    # Alexandros Koliousis (26 March 2019)
-    # Modify print-out a little bit...
-    delta = time.time() - global_start_time
-
-    log_str = '[%10.3f]\t%6i\t%7i\t%s\t%.*f' % (
-        sum(step_train_times),
-        delta,
+    log_str = '%i\t%s\t%.*f' % (
         step + 1,
         get_perf_timing_str(speed_mean, speed_uncertainty, speed_jitter),
         LOSS_AND_ACCURACY_DIGITS_TO_SHOW, lossval)
-
     if 'top_1_accuracy' in results:
       log_str += '\t%.*f\t%.*f' % (
           LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
           LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
-
     log_fn(log_str)
-    sys.stdout.flush()
-
     if benchmark_logger:
       benchmark_logger.log_metric(
           'current_examples_per_sec', speed_mean, global_step=step + 1)
@@ -976,42 +900,6 @@ def benchmark_one_step(sess,
             'text' if as_text else 'binary',
             os.path.join(path, graph_filename)))
         tf.train.write_graph(graph_def, path, graph_filename, as_text)
-  #
-  # Alexandros Koliousis (25 March 2019)
-  #
-  # Checkpoint model every N steps
-  #
-  if params.checkpoint_every_n_epochs:
-    # print("DBG> Try checkpoint at %d/%d steps" % (step, checkpoint_interval))
-    if (step >= 0 and (step == 0 or (step + 1) % checkpoint_interval == 0)):
-      # print("DBG>", "%d/%d" % (step, checkpoint_interval))
-      sys.stdout.flush()
-      # Have we displayed statistics in this step?
-      if ((step + 1) % params.display_every != 0):
-        # Display statistics since we want to correlate them with evaluation results
-        speed_mean, speed_uncertainty, speed_jitter = get_perf_timing(
-          batch_size, step_train_times, params.display_perf_ewma)
-        
-        delta = time.time() - global_start_time
-        
-        log_str = '[%10.3f]\t%6i\t%7i\t%s\t%.*f' % (
-          sum(step_train_times),
-          delta,
-          step + 1, 
-          get_perf_timing_str(speed_mean, speed_uncertainty, speed_jitter),
-          LOSS_AND_ACCURACY_DIGITS_TO_SHOW, lossval)
-        if 'top_1_accuracy' in results:
-          log_str += '\t%.*f\t%.*f' % (
-            LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
-            LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
-        log_fn(log_str)
-      # Save the model checkpoint periodically
-      if not (saver and filepath):
-        raise ValueError("Undefined saver & filepath")
-      print("DBG> Checkpoint at step", (step + 1))
-      sys.stdout.flush()
-      saver.save(sess, filepath, global_step=(step + 1), write_state=False)
-
   return (summary_str, lossval)
 
 
@@ -1385,16 +1273,6 @@ class BenchmarkCNN(object):
                                                       self.params.data_name)
     self.model = model or model_config.get_model_config(
         self.params.model, self.dataset, self.params)
-
-    #
-    # Alexandros Koliousis (25 March 2019)
-    #
-    # Create checkpoint directory
-    if not self.params.eval:
-        self.filepath, self.version = _checkpoint_path(params.checkpoint_directory,
-                params.checkpoint_version)
-        print("DBG>", "%s (v. %d)" % (self.filepath, self.version))
-
     self.trace_filename = self.params.trace_file
     self.rewriter_config = self.params.rewriter_config
     autotune_threshold = self.params.autotune_threshold if (
@@ -1679,19 +1557,6 @@ class BenchmarkCNN(object):
       if offset.is_integer():
         offset = int(offset)
       mlperf.logger.log(key=mlperf.tags.EVAL_EPOCH_OFFSET, value=offset)
-
-    #
-    # Alexandros Koliousis (25 March 2019)
-    #
-    print("DBG>", "Train for %d iterations or %d epochs" % (self.num_batches, self.num_epochs))
-    print("DBG>", "Approximately %d iterations per epoch" % (self.dataset.num_examples_per_epoch(subset) / self.batch_size))
-
-    self.checkpoint_interval = int(params.checkpoint_interval * (self.dataset.num_examples_per_epoch(subset) / self.batch_size))
-    print("DBG>", "Checkpoint every %d iterations" % self.checkpoint_interval)
-
-    if (self.params.checkpoint_every_n_epochs and self.checkpoint_interval == 0):
-      raise ValueError("Undefined checkpoint interval")
-
 
     if (self.params.staged_vars and
         self.params.variable_update != 'parameter_server'):
@@ -1981,9 +1846,7 @@ class BenchmarkCNN(object):
     if self._doing_eval:
       with tf.Graph().as_default():
         # TODO(laigd): freeze the graph in eval mode.
-        # Alexandros Koliousis (27 March 2019)
-        # return self._run_eval()
-        return self._run_eval_modified()
+        return self._run_eval()
     else:
       return self._benchmark_train()
 
@@ -2025,54 +1888,6 @@ class BenchmarkCNN(object):
           break
         time.sleep(self.params.eval_interval_secs)
     return {}
-
-  def _run_eval_modified(self):
-
-    info = self._build_eval_graph()
-    saver = tf.train.Saver(self.variable_mgr.savable_variables())
-    writer = tf.summary.FileWriter(self.params.eval_dir, tf.get_default_graph())
-    target = ''
-
-    pattern = os.path.join(self.params.checkpoint_directory, 'model.ckpt-*.index')
-    filenames = gfile.Glob(pattern)
-    if not filenames:
-      raise ValueError('No files found matching {}'.format(pattern))
-    filenames = sorted(filenames, key=lambda x: int(x.split('-')[-1].split('.')[0]))
-
-    for filename in filenames:
-
-      with tf.Session(target=target, config=create_config_proto(self.params)) as session:
-
-        if not filename.endswith(".index"):
-          raise ValueError("Fatal error")
-        checkpoint = filename[:-len(".index")]
-        step = int(checkpoint.split("-")[-1])
-
-        try:
-            saver.restore(session, checkpoint)
-        except:
-            log_fn('Failed to restore checkpoint %s' % checkpoint)
-
-        image_producer = self._initialize_eval_graph(info.enqueue_ops,
-                                                     info.input_producer_op,
-                                                     info.local_var_init_op_group,
-                                                     session)
-
-        self._eval_once(session,
-                        writer,
-                        info.fetches,
-                        info.summary_op,
-                        image_producer,
-                        step)
-        
-        image_producer.done()
-        
-        if _DEBUG_TEST:
-          print("DBG> Exit after 1 test")
-          break
-
-    return {}
-
 
   def _build_eval_graph(self, scope_name=None):
     """Build the evaluation graph.
@@ -2144,10 +1959,6 @@ class BenchmarkCNN(object):
             image_producer.notify_image_consumption()
       return image_producer
 
-  # Alexandros Koliousis (27 March 2019)
-  #
-  # Evaluate 1 checkpoint
-  #
   def _eval_once(self, sess, summary_writer, fetches, summary_op,
                  image_producer, global_step):
     """Evaluate the model using the validation dataset."""
@@ -2160,9 +1971,6 @@ class BenchmarkCNN(object):
       top_1_accuracy_sum = 0.0
       top_5_accuracy_sum = 0.0
       total_eval_count = self.num_batches * self.batch_size
-
-      print("DBG> %d batches %d images/batch %d images" % (self.num_batches, self.batch_size, total_eval_count))
-
       for step in xrange(self.num_batches):
         if (summary_writer and self.params.save_summaries_steps > 0 and
             (step + 1) % self.params.save_summaries_steps == 0):
@@ -2175,7 +1983,6 @@ class BenchmarkCNN(object):
         results = self.model.postprocess(results)
         top_1_accuracy_sum += results['top_1_accuracy']
         top_5_accuracy_sum += results['top_5_accuracy']
-
         if (step + 1) % self.params.display_every == 0:
           duration = time.time() - start_time
           examples_per_sec = (
@@ -2199,8 +2006,6 @@ class BenchmarkCNN(object):
         summary_writer.add_summary(summary, global_step)
       log_fn('Accuracy @ 1 = %.4f Accuracy @ 5 = %.4f [%d examples]' %
              (accuracy_at_1, accuracy_at_5, total_eval_count))
-      # Flush
-      sys.stdout.flush()
       elapsed_time = loop_end_time - loop_start_time
       images_per_sec = (self.num_batches * self.batch_size / elapsed_time)
       if self.mode != constants.BenchmarkMode.TRAIN_AND_EVAL:
@@ -2229,7 +2034,6 @@ class BenchmarkCNN(object):
         mlperf.logger.log(key=mlperf.tags.EVAL_TARGET,
                           value=self.params.stop_at_top_1_accuracy)
       return accuracy_at_1, accuracy_at_5
-
 
   def _benchmark_train(self):
     """Run cnn in benchmark mode. Skip the backward pass if forward_only is on.
@@ -2562,8 +2366,6 @@ class BenchmarkCNN(object):
     last_eval_step = local_step
     loop_start_time = time.time()
     last_average_loss = None
-    # akoliousis: log start time
-    global_start_time = time.time()
     while not done_fn():
       if local_step == 0:
         log_fn('Done warm up')
@@ -2589,28 +2391,14 @@ class BenchmarkCNN(object):
         fetch_summary = None
       collective_graph_key = 7 if (
           self.params.variable_update == 'collective_all_reduce') else 0
-      #
-      # Alexandros Koliousis (25 March 2019)
-      #
       (summary_str, last_average_loss) = benchmark_one_step(
-          sess, 
-          graph_info.fetches, 
-          local_step,
-          self.batch_size * (self.num_workers if self.single_session else 1),
-          global_start_time,
-          step_train_times,
-          self.trace_filename, 
-          self.params.partitioned_graph_file_prefix,
-          profiler, 
-          image_producer, 
-          self.params, 
-          fetch_summary,
+          sess, graph_info.fetches, local_step,
+          self.batch_size * (self.num_workers
+                             if self.single_session else 1), step_train_times,
+          self.trace_filename, self.params.partitioned_graph_file_prefix,
+          profiler, image_producer, self.params, fetch_summary,
           benchmark_logger=self.benchmark_logger,
-          collective_graph_key=collective_graph_key,
-          saver=supervisor.saver,
-          filepath=self.filepath,
-          checkpoint_interval=self.checkpoint_interval)
-
+          collective_graph_key=collective_graph_key)
       if summary_str is not None and is_chief:
         supervisor.summary_computed(sess, summary_str)
       local_step += 1
@@ -2680,17 +2468,6 @@ class BenchmarkCNN(object):
       log_fn('-' * 64)
     else:
       log_fn('Done with training')
-
-    # Alexandros Koliousis (26 March 2019)
-    #
-    # Checkpoint one lsat time?
-    #
-    if not (supervisor.saver and self.filepath):
-        raise ValueError("Undefined saver")
-    print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
-    sys.stdout.flush()
-    supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
-
     num_steps_since_last_eval = local_step - last_eval_step
     mlperf.logger.log(
         key=mlperf.tags.INPUT_SIZE,
