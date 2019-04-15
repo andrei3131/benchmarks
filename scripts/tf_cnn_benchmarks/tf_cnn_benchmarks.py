@@ -18,13 +18,15 @@
 See the README for more information.
 """
 
+from __future__ import absolute_import
+from __future__ import division
 from __future__ import print_function
 
 from absl import app
 from absl import flags as absl_flags
 import tensorflow as tf
 
-import benchmark_cnn
+import benchmark_cnn_kungfu
 import cnn_util
 import flags
 from cnn_util import log_fn
@@ -33,7 +35,6 @@ from cnn_util import log_fn
 flags.define_flags()
 for name in flags.param_specs.keys():
   absl_flags.declare_key_flag(name)
-
 
 def main(positional_arguments):
   # Command-line arguments like '--distortions False' are equivalent to
@@ -45,14 +46,16 @@ def main(positional_arguments):
     raise ValueError('Received unknown positional arguments: %s'
                      % positional_arguments[1:])
 
-  params = benchmark_cnn.make_params_from_flags()
-  params = benchmark_cnn.setup(params)
-  bench = benchmark_cnn.BenchmarkCNN(params)
+  params = benchmark_cnn_kungfu.make_params_from_flags()
+  
+  params = benchmark_cnn_kungfu.setup(params)
+  bench = benchmark_cnn_kungfu.BenchmarkCNN(params)
 
   tfversion = cnn_util.tensorflow_version_tuple()
   log_fn('TensorFlow:  %i.%i' % (tfversion[0], tfversion[1]))
 
   bench.print_info()
+
   bench.run()
 
 

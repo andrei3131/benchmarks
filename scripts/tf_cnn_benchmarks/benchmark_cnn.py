@@ -62,7 +62,6 @@ from tensorflow.python.util import nest
 
 _DEFAULT_NUM_BATCHES = 100
 
-
 # GraphInfo encapsulates the tensors/ops that we care about after building a
 # graph. We use them to benchmark the graph.
 GraphInfo = namedtuple(  # pylint: disable=invalid-name
@@ -158,6 +157,12 @@ flags.DEFINE_boolean('print_training_accuracy', False,
                      'whether to calculate and print training accuracy during '
                      'training')
 flags.DEFINE_integer('batch_size', 0, 'batch size per compute device')
+
+# Ako
+flags.DEFINE_integer('ako_partitions', 1, 'number of Ako partitions')
+flags.DEFINE_string('kungfu_strategy', 'parallel',
+		    'Name of KungFu strategy: parallel or ako. If not specified, default is ako')
+
 flags.DEFINE_integer('batch_group_size', 1,
                      'number of groups of batches processed in the image '
                      'producer.')
@@ -522,7 +527,7 @@ flags.DEFINE_integer('fp16_inc_loss_scale_every_n', 1000,
 flags.DEFINE_enum('variable_update', 'parameter_server',
                   ('parameter_server', 'replicated', 'distributed_replicated',
                    'independent', 'distributed_all_reduce',
-                   'collective_all_reduce', 'horovod'),
+                   'collective_all_reduce', 'horovod', 'kungfu'),
                   'The method for managing variables: parameter_server, '
                   'replicated, distributed_replicated, independent, '
                   'distributed_all_reduce, collective_all_reduce, horovod')
@@ -1427,6 +1432,11 @@ class BenchmarkCNN(object):
     elif self.params.variable_update == 'horovod':
       import horovod.tensorflow as hvd  # pylint: disable=g-import-not-at-top
       self.num_workers = hvd.size()
+    elif self.params.variable_update == 'kungfu':
+      import json, os
+      cluster_spec = json.loads(os.getenv('KUNGFU_CLUSTER_SPEC'))
+      cluster_size = len(cluster_spec['Peers'])
+      self.num_workers = cluster_size
     else:
       self.num_workers = 1
     self.num_ps = self.cluster_manager.num_ps() if self.cluster_manager else 0
@@ -1544,7 +1554,7 @@ class BenchmarkCNN(object):
         raise ValueError('Invalid variable_update in local mode: %s' %
                          self.params.variable_update)
       self.variable_mgr = variable_mgr.VariableMgrDistributedReplicated(self)
-    elif self.params.variable_update in ('independent', 'horovod'):
+    elif self.params.variable_update in ('independent', 'horovod', 'kungfu'):
       if self.job_name:
         raise ValueError('Invalid variable_update in distributed mode: %s' %
                          self.params.variable_update)
@@ -2072,6 +2082,8 @@ class BenchmarkCNN(object):
       # First worker will be 'chief' - it will write summaries and
       # save checkpoints.
       is_chief = hvd.rank() == 0
+    if self.params.variable_update == 'kungfu':
+      is_chief = int(os.getenv('KUNGFU_SELF_RANK')) == 0
     else:
       is_chief = (not self.job_name or self.task_index == 0)
 
@@ -2119,6 +2131,9 @@ class BenchmarkCNN(object):
     if self.params.variable_update == 'horovod':
       import horovod.tensorflow as hvd  # pylint: disable=g-import-not-at-top
       bcast_global_variables_op = hvd.broadcast_global_variables(0)
+    elif self.params.variable_update == 'kungfu':
+      import kungfu as kf
+      bcast_global_variables_op = kf.distributed_variables_initializer()
     else:
       bcast_global_variables_op = None
 
@@ -2143,7 +2158,8 @@ class BenchmarkCNN(object):
         # since we want session to be initialized symmetrically on all the
         # workers.
         is_chief=is_chief or (self.params.variable_update == 'horovod'
-                              or self.distributed_collective),
+                              or self.distributed_collective
+                              or self.params.variable_update == 'kungfu'),
         # Log dir should be unset on non-chief workers to prevent Horovod
         # workers from corrupting each other's checkpoints.
         logdir=self.params.train_dir if is_chief else None,
@@ -2644,6 +2660,9 @@ class BenchmarkCNN(object):
     if self.params.variable_update == 'horovod':
       import horovod.tensorflow as hvd  # pylint: disable=g-import-not-at-top
       seed_adjustment = hvd.rank()
+    elif self.params.variable_update == 'kungfu':
+      import os
+      seed_adjustment = int(os.getenv('KUNGFU_SELF_RANK'))
     else:
       seed_adjustment = 0
     tf.set_random_seed(self.params.tf_random_seed + seed_adjustment)
@@ -2769,7 +2788,8 @@ class BenchmarkCNN(object):
 
     # TODO(reedwm): Greatly simplify the learning rate code.
     if (self.params.variable_update == 'horovod' or
-        self.params.variable_update == 'collective_all_reduce'):
+        self.params.variable_update == 'collective_all_reduce' or
+        self.params.variable_update == 'kungfu'):
       # Each worker independently increments global_step.
       examples_per_step = self.batch_size * self.num_workers
     else:
@@ -3140,7 +3160,20 @@ class BenchmarkCNN(object):
           horovod_device = ''
         # All-reduce gradients using Horovod.
         grads = [hvd.allreduce(grad, average=False, device_dense=horovod_device)
-                 for grad in grads]
+                for grad in grads]
+
+      if self.params.variable_update == 'kungfu':
+        if self.params.kungfu_strategy == "ako":
+          from kungfu.ops import ako_group_all_reduce
+          grads = ako_group_all_reduce(grads, num_partitions=self.params.ako_partitions)
+        elif self.params.kungfu_strategy == "cpu_all_reduce":
+          from kungfu.ops import cpu_group_all_reduce
+          grads = cpu_group_all_reduce(grads)
+        elif self.params.kungfu_strategy == "nccl_all_reduce":
+          from kungfu.ops import gpu_group_all_reduce
+          grads = gpu_group_all_reduce(grads)
+        else:
+          raise Exception('Unknown kungfu strategy.')
 
       if self.params.staged_vars:
         grad_dtypes = [grad.dtype for grad in grads]
