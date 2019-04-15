@@ -779,12 +779,13 @@ def create_config_proto(params):
     config.intra_op_parallelism_threads = params.num_intra_threads
   config.inter_op_parallelism_threads = params.num_inter_threads
   config.experimental.collective_group_leader = '/job:worker/replica:0/task:0'
-  config.gpu_options.experimental.collective_ring_order = params.gpu_indices
+  # Andrei-Octavian Brabete: Remove below functionality incompatible with tf v1.12
+  # config.gpu_options.experimental.collective_ring_order = params.gpu_indices
   config.gpu_options.force_gpu_compatible = params.force_gpu_compatible
-  config.experimental.use_numa_affinity = params.use_numa_affinity
-  if params.device == 'cpu':
+  # config.experimental.use_numa_affinity = params.use_numa_affinity
+  # if params.device == 'cpu':
     # TODO(tucker): change num_gpus to num_devices
-    config.device_count['CPU'] = params.num_gpus
+  #  config.device_count['CPU'] = params.num_gpus
   if params.allow_growth is not None:
     config.gpu_options.allow_growth = params.allow_growth
   if params.gpu_memory_frac_for_testing > 0:
@@ -1014,9 +1015,17 @@ def benchmark_one_step(sess,
             LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
             LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
         log_fn(log_str)
-      # Save the model checkpoint periodically
-      if not (saver and filepath):
-        raise ValueError("Undefined saver & filepath")
+      #  Save the model checkpoint periodically
+      if params.variable_update == 'kungfu':
+         if int(os.getenv('KUNGFU_SELF_RANK')) == 0:
+            if not (saver and filepath):   
+               raise ValueError("Undefined saver & filepath")
+         else:
+            return (summary_str, lossval)
+      else:   
+         if not (saver and filepath):
+            raise ValueError("Undefined saver & filepath")
+      
       print("DBG> Checkpoint at step", (step + 1))
       sys.stdout.flush()
       saver.save(sess, filepath, global_step=(step + 1), write_state=False)
@@ -2364,7 +2373,7 @@ class BenchmarkCNN(object):
       # save checkpoints.
       is_chief = hvd.rank() == 0
     if self.params.variable_update == 'kungfu':
-      is_chief = int(os.getenv('KUNGFU_SELF_RANK')) == 0
+      is_chief = int(os.getenv('KUNGFU_SELF_RANK')) == 0 
     else:
       is_chief = (not self.job_name or self.task_index == 0)
 
@@ -2703,13 +2712,15 @@ class BenchmarkCNN(object):
 
     # Alexandros Koliousis (26 March 2019)
     #
-    # Checkpoint one lsat time?
+    # Checkpoint one last time?
     #
-    if not (supervisor.saver and self.filepath):
-        raise ValueError("Undefined saver")
-    print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
-    sys.stdout.flush()
-    supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
+    if is_chief:
+       if not (supervisor.saver and self.filepath):
+            raise ValueError("Undefined saver")
+       print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
+       sys.stdout.flush()
+       supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
+    
 
     num_steps_since_last_eval = local_step - last_eval_step
     mlperf.logger.log(

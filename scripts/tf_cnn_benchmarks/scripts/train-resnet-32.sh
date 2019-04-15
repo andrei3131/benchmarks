@@ -4,7 +4,7 @@
 #
 PROFILE=0
 
-NVPROFEXEC=/usr/local/cuda/bin/nvprof
+NVPROFEXEC=nvprof
 NVPROFOPTS="-o profiler.nvvp"
 if [ $PROFILE -gt 1 ]; then
 	#
@@ -17,7 +17,7 @@ fi
 # Batch size (per GPU)
 B=32
 # Numbe of GPU devices
-G=4
+G=1
 # Learning rate schedule (step-wise)
 S="0.1;80;0.01;120;0.001" # LR0;E1;LR1;...;En;LRn
 # Version of ResNet
@@ -41,11 +41,11 @@ DATASET="cifar10"
 
 # Synthetic data
 # DATADIR=""
-DATADIR="datasets/cifar-10/batches"
 # TF record data
+DATADIR="/data/cifar-10/cifar-10-batches-py"
 # DATADIR="datasets/cifar-10"
 
-EPOCHS=1 # 160
+EPOCHS=140 # 160
 
 MOMENTUM=0.9
 DECAY="0.0001"
@@ -53,10 +53,14 @@ OPTIMISER="momentum" # "sgd" or "momentum"
 
 # Synchronisation parameters
 
-UPDATE="replicated" # parameter_server, replicated, independent
-REPACKING="8"
+UPDATE="kungfu" # parameter_server, replicated, independent, kungfu
 STAGED="False"
-ALLREDUCE="nccl" # empty, nccl, or xring
+ALLREDUCE="" # empty, nccl, or xring
+
+
+# KungFu Synchronization strategy
+KUNGFU_STRATEGY="ako" # ako, cpu_all_reduce, nccl_all_reduce
+AKO_PARTITIONS="15"   # empty, max_number_of_model_variables
 
 DISPLAY_INTERVAL=100
 
@@ -64,8 +68,8 @@ DISPLAY_INTERVAL=100
 # CHECKPOINT_EVERY_N_EPOCHS=True
 
 # We want 1 checkpoint per epoch...
-CHECKPOINT_INTERVAL=1
-CHECKPOINT_DIRECTORY="checkpoints"
+CHECKPOINT_INTERVAL=0.5
+CHECKPOINT_DIRECTORY="checkpoints/checkpoints-ako-15"
 
 FLAGS=${FLAGS}" --model=${MODEL}"
 FLAGS=${FLAGS}" --data_name=${DATASET}"
@@ -79,7 +83,9 @@ FLAGS=${FLAGS}" --data_name=${DATASET}"
 #else
 #	FLAGS=${FLAGS}" --num_epochs=${EPOCHS}"
 #fi
-FLAGS=${FLAGS}" --num_batches=1"
+
+FLAGS=${FLAGS}" --num_epochs=${EPOCHS}"
+#FLAGS=${FLAGS}" --num_batches=1"
 
 # Run benchmark in training mode
 FLAGS=${FLAGS}" --eval=False --forward_only=False"
@@ -119,6 +125,10 @@ FLAGS=${FLAGS}" --variable_update=${UPDATE}"
 FLAGS=${FLAGS}" --staged_vars=${STAGED}"
 [ -n "${ALLREDUCE}" ] && FLAGS=${FLAGS}" --all_reduce_spec=${ALLREDUCE}"
 
+# Synchronization strategy
+FLAGS=${FLAGS}" --kungfu_strategy=${KUNGFU_STRATEGY}"
+[ -n "${AKO_PARTITIONS}" ] && FLAGS=${FLAGS}" --ako_partitions=${AKO_PARTITIONS}"
+
 # Image producer configuration
 FLAGS=${FLAGS}" --use_datasets=True"
 
@@ -141,26 +151,7 @@ FLAGS=${FLAGS}" --batchnorm_persistent=True"
 FLAGS=${FLAGS}" --use_tf_layers=True"
 FLAGS=${FLAGS}" --winograd_nonfused=True"
 
+
 # Run
 printf "Train ResNet32 v.%s with batch size %4d on %d GPU devices\n" $V $B $G
-#
-if [ $PROFILE -gt 0 ]; then
-	# Check if profiler is available
-	which $NVPROFEXEC >/dev/null 2>&1
-	if [ $? -eq 1 ]; then
-		echo "error: $NVPROF not found"
-		exit 1
-	fi
-	# Print useful info
-	echo -n "Profiler mode: "
-	if [ $PROFILE -gt 1 ]; then
-		echo "Run 1 batch on 1 GPU"
-	else
-		echo "Train for $EPOCHS epochs"
-	fi
-	
-	echo "$NVPROFEXEC $NVPROFOPTS python tf_cnn_benchmarks.py $FLAGS"
-	$NVPROFEXEC $NVPROFOPTS python tf_cnn_benchmarks.py $FLAGS # > results/resnet-32-b-$B-g-$G.out
-else
-	python tf_cnn_benchmarks.py $FLAGS # > results/resnet-32-b-$B-g-$G.out
-fi
+/ab7515/KungFu/bin/kungfu-prun -np=4 -timeout=2000m python3 tf_cnn_benchmarks.py $FLAGS > /resnet-32-b-$B-g-$G-ako-15-partitions.out 2>&1
