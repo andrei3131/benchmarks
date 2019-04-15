@@ -645,6 +645,15 @@ class TfCnnBenchmarksTest(tf.test.TestCase):
         use_fp16=True, fp16_vars=True)
     self._train_and_eval_local(params)
 
+  def testXlaCompile(self):
+    params = test_util.get_params('testXlaCompile')._replace(xla_compile=True)
+    self._train_and_eval_local(params)
+
+  def testXlaCompileWithFp16(self):
+    params = test_util.get_params('testXlaCompileWithFp16')._replace(
+        use_fp16=True, xla_compile=True)
+    self._train_and_eval_local(params)
+
   def testGradientRepacking(self):
     params = test_util.get_params('testGradientRepacking1')._replace(
         gradient_repacking=2)
@@ -749,15 +758,6 @@ class TfCnnBenchmarksTest(tf.test.TestCase):
         'testImagenetPreprocessorVerboseSummary')._replace(
             data_dir=imagenet_dir, data_name='imagenet', distortions=False,
             summary_verbosity=2)
-    self._train_and_eval_local(params, use_test_preprocessor=False)
-
-  def testImagenetPreprocessorWithoutMultiDeviceIterator(self):
-    imagenet_dir = os.path.join(platforms_util.get_test_data_dir(),
-                                'fake_tf_record_data')
-    params = test_util.get_params(
-        'testImagenetPreprocessorWithoutMultiDeviceIterator')._replace(
-            data_dir=imagenet_dir, data_name='imagenet',
-            use_multi_device_iterator=False)
     self._train_and_eval_local(params, use_test_preprocessor=False)
 
   def testCifar10SyntheticData(self):
@@ -995,8 +995,13 @@ class TfCnnBenchmarksTest(tf.test.TestCase):
 
     params = benchmark_cnn.make_params(num_epochs=3)
     batches, epochs = benchmark_cnn.get_num_batches_and_epochs(params, 2, 3)
-    self.assertEqual(batches, 4)
-    self.assertAlmostEqual(epochs, 8./3.)
+    self.assertEqual(batches, 5)
+    self.assertAlmostEqual(epochs, 10./3.)
+
+    params = benchmark_cnn.make_params(num_epochs=4)
+    batches, epochs = benchmark_cnn.get_num_batches_and_epochs(params, 2, 3)
+    self.assertEqual(batches, 6)
+    self.assertAlmostEqual(epochs, 4)
 
     with self.assertRaises(ValueError):
       params = benchmark_cnn.make_params(num_batches=100, num_epochs=100)
@@ -1006,6 +1011,9 @@ class TfCnnBenchmarksTest(tf.test.TestCase):
     # The idea of this test is that all train images are black and all eval
     # images are white. We pass the images through the TestModel, and ensure
     # the outputs are as expected.
+
+    batch_size = params.batch_size
+    eval_batch_size = params.eval_batch_size or params.batch_size
 
     class TestModel(test_util.TestCNNModel):
 
@@ -1018,6 +1026,9 @@ class TfCnnBenchmarksTest(tf.test.TestCase):
           # This will allow us to test that 100 is only added during training
           # and not during eval.
           cnn.top_layer += 100
+          assert cnn.top_layer.shape[0] == batch_size
+        else:
+          assert cnn.top_layer.shape[0] == eval_batch_size
 
         # Reduce the image to a single number. The number should be (-1 + 100)
         # during training and 1 during testing.
@@ -1094,7 +1105,8 @@ class TfCnnBenchmarksTest(tf.test.TestCase):
     self._testEvalDuringTraining(
         base_params._replace(eval_during_training_every_n_steps=2,
                              variable_update='replicated',
-                             use_fp16=True, train_dir=train_dir),
+                             use_fp16=True, train_dir=train_dir,
+                             eval_batch_size=base_params.batch_size + 2),
         expected_num_eval_batches_found)
 
     # Test --eval_during_training_every_n_epochs
@@ -1135,13 +1147,13 @@ class TfCnnBenchmarksTest(tf.test.TestCase):
 
   def testEvalDuringTrainingNumEpochs(self):
     params = benchmark_cnn.make_params(
-        batch_size=1, eval_during_training_every_n_steps=1,
+        batch_size=1, eval_batch_size=2, eval_during_training_every_n_steps=1,
         num_batches=30, num_eval_epochs=100 / datasets.IMAGENET_NUM_VAL_IMAGES)
     bench_cnn = benchmark_cnn.BenchmarkCNN(params)
     self.assertEqual(bench_cnn.num_batches, 30)
     self.assertAlmostEqual(bench_cnn.num_epochs,
                            30 / datasets.IMAGENET_NUM_TRAIN_IMAGES)
-    self.assertAlmostEqual(bench_cnn.num_eval_batches, 100)
+    self.assertAlmostEqual(bench_cnn.num_eval_batches, 50)
     self.assertAlmostEqual(bench_cnn.num_eval_epochs,
                            100 / datasets.IMAGENET_NUM_VAL_IMAGES)
 
@@ -1229,8 +1241,6 @@ class TfCnnBenchmarksTest(tf.test.TestCase):
       benchmark_cnn.make_params(job_name='foo')
     with self.assertRaises(ValueError):
       benchmark_cnn.make_params(gpu_memory_frac_for_testing=-1.)
-    with self.assertRaises(ValueError):
-      benchmark_cnn.make_params(gpu_memory_frac_for_testing=2.)
 
 
 class VariableUpdateTest(tf.test.TestCase):

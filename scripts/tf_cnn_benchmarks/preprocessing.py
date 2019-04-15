@@ -25,16 +25,14 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 
 import cnn_util
-from tensorflow.contrib.data.python.ops import batching
-from tensorflow.contrib.data.python.ops import interleave_ops
 from tensorflow.contrib.data.python.ops import threadpool
 from tensorflow.contrib.image.python.ops import distort_image_ops
-from tensorflow.python.data.experimental.ops import prefetching_ops
 from tensorflow.python.data.ops import multi_device_iterator_ops
 from tensorflow.python.framework import function
 from tensorflow.python.layers import utils
 from tensorflow.python.ops import data_flow_ops
 from tensorflow.python.platform import gfile
+import mlperf
 
 
 def parse_example_proto(example_serialized):
@@ -183,10 +181,17 @@ def decode_jpeg(image_buffer, scope=None):  # , dtype=tf.float32):
     return image
 
 
+_R_MEAN = 123.68
+_G_MEAN = 116.78
+_B_MEAN = 103.94
+_CHANNEL_MEANS = [_R_MEAN, _G_MEAN, _B_MEAN]
+
+
 def normalized_image(images):
   # Rescale from [0, 255] to [0, 2]
   images = tf.multiply(images, 1. / 127.5)
   # Rescale to [-1, 1]
+  mlperf.logger.log(key=mlperf.tags.INPUT_MEAN_SUBTRACTION, value=[1.0] * 3)
   return tf.subtract(images, 1.0)
 
 
@@ -199,10 +204,10 @@ def eval_image(image,
   """Get the image for model evaluation.
 
   We preprocess the image simiarly to Slim, see
-  https://github.com/tensorflow/models/blob/master/slim/preprocessing/vgg_preprocessing.py
+  https://github.com/tensorflow/models/blob/master/research/slim/preprocessing/vgg_preprocessing.py
   Validation images do not have bounding boxes, so to crop the image, we first
   resize the image such that the aspect ratio is maintained and the resized
-  height and width are both at least 1.15 times `height` and `width`
+  height and width are both at least 1.145 times `height` and `width`
   respectively. Then, we do a central crop to size (`height`, `width`).
 
   Args:
@@ -233,7 +238,10 @@ def eval_image(image,
     image_height_float = tf.cast(image_height, tf.float32)
     image_width_float = tf.cast(image_width, tf.float32)
 
-    scale_factor = 1.15
+    # This value is chosen so that in resnet, images are cropped to a size of
+    # 256 x 256, which matches what other implementations do. The final image
+    # size for resnet is 224 x 224, and floor(224 * 1.145) = 256.
+    scale_factor = 1.145
 
     # Compute resize_height and resize_width to be the minimum values such that
     #   1. The aspect ratio is maintained (i.e. resize_height / resize_width is
@@ -246,6 +254,8 @@ def eval_image(image,
                             tf.int32)
     resize_width = tf.cast(image_width_float * max_ratio * scale_factor,
                            tf.int32)
+    mlperf.logger.log_input_resize_aspect_preserving(height, width,
+                                                     scale_factor)
 
     # Resize the image to shape (`resize_height`, `resize_width`)
     image_resize_method = get_image_resize_method(resize_method, batch_position)
@@ -255,6 +265,9 @@ def eval_image(image,
                                              align_corners=False)
 
     # Do a central crop of the image to size (height, width).
+    # MLPerf requires us to log (height, width) with two different keys.
+    mlperf.logger.log(key=mlperf.tags.INPUT_CENTRAL_CROP, value=[height, width])
+    mlperf.logger.log(key=mlperf.tags.INPUT_RESIZE, value=[height, width])
     total_crop_height = (resize_height - height)
     crop_top = total_crop_height // 2
     total_crop_width = (resize_width - width)
@@ -317,13 +330,26 @@ def train_image(image_buffer,
     # allowed range of aspect ratios, sizes and overlap with the human-annotated
     # bounding box. If no box is supplied, then we assume the bounding box is
     # the entire image.
+    min_object_covered = 0.1
+    aspect_ratio_range = [0.75, 1.33]
+    area_range = [0.05, 1.0]
+    max_attempts = 100
+    mlperf.logger.log(key=mlperf.tags.INPUT_DISTORTED_CROP_MIN_OBJ_COV,
+                      value=min_object_covered)
+    mlperf.logger.log(key=mlperf.tags.INPUT_DISTORTED_CROP_RATIO_RANGE,
+                      value=aspect_ratio_range)
+    mlperf.logger.log(key=mlperf.tags.INPUT_DISTORTED_CROP_AREA_RANGE,
+                      value=area_range)
+    mlperf.logger.log(key=mlperf.tags.INPUT_DISTORTED_CROP_MAX_ATTEMPTS,
+                      value=max_attempts)
+
     sample_distorted_bounding_box = tf.image.sample_distorted_bounding_box(
         tf.image.extract_jpeg_shape(image_buffer),
         bounding_boxes=bbox,
-        min_object_covered=0.1,
-        aspect_ratio_range=[0.75, 1.33],
-        area_range=[0.05, 1.0],
-        max_attempts=100,
+        min_object_covered=min_object_covered,
+        aspect_ratio_range=aspect_ratio_range,
+        area_range=area_range,
+        max_attempts=max_attempts,
         use_image_if_no_bounding_boxes=True)
     bbox_begin, bbox_size, distort_bbox = sample_distorted_bounding_box
     if summary_verbosity >= 3:
@@ -348,10 +374,12 @@ def train_image(image_buffer,
                                    dct_method='INTEGER_FAST')
       image = tf.slice(image, bbox_begin, bbox_size)
 
+    mlperf.logger.log(key=mlperf.tags.INPUT_RANDOM_FLIP)
     distorted_image = tf.image.random_flip_left_right(image)
 
     # This resizing operation may distort the images because the aspect
     # ratio is not respected.
+    mlperf.logger.log(key=mlperf.tags.INPUT_RESIZE, value=[height, width])
     image_resize_method = get_image_resize_method(resize_method, batch_position)
     distorted_image = tf.image.resize_images(
         distorted_image, [height, width],
@@ -459,47 +487,6 @@ class InputPreprocessor(object):
   def parse_and_preprocess(self, value, batch_position):
     """Function to parse and preprocess an Example proto in input pipeline."""
     raise NotImplementedError('Must be implemented by subclass.')
-
-  def build_prefetch_input_processing(self, batch_size, model_input_shapes,
-                                      num_splits, cpu_device, params,
-                                      gpu_devices, model_input_data_types,
-                                      dataset, doing_eval):
-    """"Returns FunctionBufferingResources that do input pre(processing)."""
-    assert self.supports_datasets()
-    with tf.device(cpu_device):
-      if doing_eval:
-        subset = 'validation'
-      else:
-        subset = 'train'
-
-      function_buffering_resources = []
-      remote_fn, args = self.minibatch_fn(
-          batch_size=batch_size,
-          model_input_shapes=model_input_shapes,
-          num_splits=num_splits,
-          dataset=dataset,
-          subset=subset,
-          train=(not doing_eval),
-          datasets_repeat_cached_sample=params.datasets_repeat_cached_sample,
-          num_threads=params.datasets_num_private_threads,
-          datasets_use_caching=params.datasets_use_caching,
-          datasets_parallel_interleave_cycle_length=(
-              params.datasets_parallel_interleave_cycle_length),
-          datasets_sloppy_parallel_interleave=(
-              params.datasets_sloppy_parallel_interleave),
-          datasets_parallel_interleave_prefetch=(
-              params.datasets_parallel_interleave_prefetch))
-      for device_num in range(len(gpu_devices)):
-        with tf.device(gpu_devices[device_num]):
-          buffer_resource_handle = prefetching_ops.function_buffering_resource(
-              f=remote_fn,
-              output_types=model_input_data_types,
-              target_device=cpu_device,
-              string_arg=args[0],
-              buffer_size=params.datasets_prefetch_buffer_size,
-              shared_name=None)
-          function_buffering_resources.append(buffer_resource_handle)
-      return function_buffering_resources
 
   # TODO(laigd): figure out how to remove these parameters, since the
   # preprocessor itself has self.batch_size, self.num_splits, etc defined.
@@ -611,7 +598,8 @@ class BaseImagePreprocessor(InputPreprocessor):
                shift_ratio=-1,
                summary_verbosity=0,
                distort_color_in_yiq=True,
-               fuse_decode_and_crop=True):
+               fuse_decode_and_crop=True,
+               match_mlperf=False):
     super(BaseImagePreprocessor, self).__init__(batch_size, output_shapes)
     image_shape = output_shapes[0]
     # image_shape is in form (batch_size, height, width, depth)
@@ -633,10 +621,16 @@ class BaseImagePreprocessor(InputPreprocessor):
           (self.batch_size, self.num_splits))
     self.batch_size_per_split = self.batch_size // self.num_splits
     self.summary_verbosity = summary_verbosity
+    self.match_mlperf = match_mlperf
 
   def parse_and_preprocess(self, value, batch_position):
     assert self.supports_datasets()
     image_buffer, label_index, bbox, _ = parse_example_proto(value)
+    if self.match_mlperf:
+      bbox = tf.zeros((1, 0, 4), dtype=bbox.dtype)
+      mlperf.logger.log(key=mlperf.tags.INPUT_CROP_USES_BBOXES, value=False)
+    else:
+      mlperf.logger.log(key=mlperf.tags.INPUT_CROP_USES_BBOXES, value=True)
     image = self.preprocess(image_buffer, bbox, batch_position)
     return (image, label_index)
 
@@ -663,9 +657,9 @@ class BaseImagePreprocessor(InputPreprocessor):
     if not file_names:
       raise ValueError('Found no files in --data_dir matching: {}'
                        .format(glob_pattern))
-    ds = tf.data.TFRecordDataset.list_files(file_names)
+    ds = tf.data.TFRecordDataset.list_files(file_names, shuffle=train)
     ds = ds.apply(
-        interleave_ops.parallel_interleave(
+        tf.data.experimental.parallel_interleave(
             tf.data.TFRecordDataset,
             cycle_length=datasets_parallel_interleave_cycle_length or 10,
             sloppy=datasets_sloppy_parallel_interleave,
@@ -680,11 +674,14 @@ class BaseImagePreprocessor(InputPreprocessor):
     if datasets_use_caching:
       ds = ds.cache()
     if train:
-      ds = ds.apply(tf.contrib.data.shuffle_and_repeat(buffer_size=10000))
+      buffer_size = 10000
+      mlperf.logger.log(key=mlperf.tags.INPUT_SHARD, value=buffer_size)
+      ds = ds.apply(
+          tf.data.experimental.shuffle_and_repeat(buffer_size=buffer_size))
     else:
       ds = ds.repeat()
     ds = ds.apply(
-        batching.map_and_batch(
+        tf.data.experimental.map_and_batch(
             map_func=self.parse_and_preprocess,
             batch_size=batch_size_per_split,
             num_parallel_batches=num_splits))
@@ -718,7 +715,12 @@ class RecordInputImagePreprocessor(BaseImagePreprocessor):
 
     # image = tf.cast(image, tf.uint8) # HACK TESTING
 
-    normalized = normalized_image(image)
+    if self.match_mlperf:
+      mlperf.logger.log(key=mlperf.tags.INPUT_MEAN_SUBTRACTION,
+                        value=_CHANNEL_MEANS)
+      normalized = image - _CHANNEL_MEANS
+    else:
+      normalized = normalized_image(image)
     return tf.cast(normalized, self.dtype)
 
   def minibatch(self,
@@ -733,6 +735,7 @@ class RecordInputImagePreprocessor(BaseImagePreprocessor):
       images = [[] for _ in range(self.num_splits)]
       labels = [[] for _ in range(self.num_splits)]
       if params.use_datasets:
+        print("DBG> Use datasets")
         ds = self.create_dataset(
             self.batch_size, self.num_splits, self.batch_size_per_split,
             dataset, subset, self.train,
@@ -752,6 +755,7 @@ class RecordInputImagePreprocessor(BaseImagePreprocessor):
       # TODO(laigd): consider removing the --use_datasets option, it should
       # always use datasets.
       else:
+        print("DBG> Don't use datasets")
         record_input = data_flow_ops.RecordInput(
             file_pattern=dataset.tf_record_pattern(subset),
             seed=301,
@@ -901,6 +905,101 @@ class Cifar10ImagePreprocessor(BaseImagePreprocessor):
       return images, labels
 
 
+class Cifar100ImagePreprocessor(BaseImagePreprocessor):
+  """Preprocessor for Cifar100 input images."""
+
+  def _distort_image(self, image):
+    """Distort one image for training a network.
+
+    Adopted the standard data augmentation scheme that is widely used for
+    this dataset: the images are first zero-padded with 4 pixels on each side,
+    then randomly cropped to again produce distorted images; half of the images
+    are then horizontally mirrored.
+
+    Args:
+      image: input image.
+    Returns:
+      distorted image.
+    """
+    image = tf.image.resize_image_with_crop_or_pad(
+        image, self.height + 8, self.width + 8)
+    distorted_image = tf.random_crop(image,
+                                     [self.height, self.width, self.depth])
+    # Randomly flip the image horizontally.
+    distorted_image = tf.image.random_flip_left_right(distorted_image)
+    if self.summary_verbosity >= 3:
+      tf.summary.image('distorted_image', tf.expand_dims(distorted_image, 0))
+    return distorted_image
+
+  def _eval_image(self, image):
+    """Get the image for model evaluation."""
+    distorted_image = tf.image.resize_image_with_crop_or_pad(
+        image, self.width, self.height)
+    if self.summary_verbosity >= 3:
+      tf.summary.image('cropped.image', tf.expand_dims(distorted_image, 0))
+    return distorted_image
+
+  def preprocess(self, raw_image):
+    """Preprocessing raw image."""
+    if self.summary_verbosity >= 3:
+      tf.summary.image('raw.image', tf.expand_dims(raw_image, 0))
+    if self.train and self.distortions:
+      image = self._distort_image(raw_image)
+    else:
+      image = self._eval_image(raw_image)
+    normalized = normalized_image(image)
+    return tf.cast(normalized, self.dtype)
+
+  def minibatch(self,
+                dataset,
+                subset,
+                params,
+                shift_ratio=-1):
+    # TODO(jsimsa): Implement datasets code path
+    del shift_ratio, params
+    with tf.name_scope('batch_processing'):
+      all_images, all_labels = dataset.read_data_files(subset)
+      all_images = tf.constant(all_images)
+      all_labels = tf.constant(all_labels)
+      input_image, input_label = tf.train.slice_input_producer(
+          [all_images, all_labels])
+      input_image = tf.cast(input_image, self.dtype)
+      input_label = tf.cast(input_label, tf.int32)
+      # Ensure that the random shuffling has good mixing properties.
+      min_fraction_of_examples_in_queue = 0.4
+      min_queue_examples = int(dataset.num_examples_per_epoch(subset) *
+                               min_fraction_of_examples_in_queue)
+      raw_images, raw_labels = tf.train.shuffle_batch(
+          [input_image, input_label], batch_size=self.batch_size,
+          capacity=min_queue_examples + 3 * self.batch_size,
+          min_after_dequeue=min_queue_examples)
+
+      images = [[] for i in range(self.num_splits)]
+      labels = [[] for i in range(self.num_splits)]
+
+      # Create a list of size batch_size, each containing one image of the
+      # batch. Without the unstack call, raw_images[i] would still access the
+      # same image via a strided_slice op, but would be slower.
+      raw_images = tf.unstack(raw_images, axis=0)
+      raw_labels = tf.unstack(raw_labels, axis=0)
+      for i in xrange(self.batch_size):
+        split_index = i % self.num_splits
+        # The raw image read from data has the format [depth, height, width]
+        # reshape to the format returned by minibatch.
+        raw_image = tf.reshape(raw_images[i],
+                               [dataset.depth, dataset.height, dataset.width])
+        raw_image = tf.transpose(raw_image, [1, 2, 0])
+        image = self.preprocess(raw_image)
+        images[split_index].append(image)
+
+        labels[split_index].append(raw_labels[i])
+
+      for split_index in xrange(self.num_splits):
+        images[split_index] = tf.parallel_stack(images[split_index])
+        labels[split_index] = tf.parallel_stack(labels[split_index])
+      return images, labels
+
+
 class COCOPreprocessor(BaseImagePreprocessor):
   """Preprocessor for COCO dataset input images, boxes, and labels."""
 
@@ -941,11 +1040,13 @@ class COCOPreprocessor(BaseImagePreprocessor):
                         'following https://github.com/tensorflow/models/blob/'
                         'master/research/object_detection/g3doc/installation.md'
                         '#protobuf-compilation')
-    source_id = tf.string_to_number(data['source_id'])
-    image = tf.image.convert_image_dtype(data['image'], dtype=tf.float32)
-    raw_shape = tf.shape(image)
+    image_buffer = data['image_buffer']
     boxes = data['groundtruth_boxes']
     classes = tf.reshape(data['groundtruth_classes'], [-1, 1])
+    source_id = tf.string_to_number(data['source_id'])
+    raw_shape = data['raw_shape']
+
+    ssd_encoder = ssd_dataloader.Encoder()
 
     # Only 80 of the 90 COCO classes are used.
     class_map = tf.convert_to_tensor(ssd_constants.CLASS_MAP)
@@ -953,16 +1054,23 @@ class COCOPreprocessor(BaseImagePreprocessor):
     classes = tf.cast(classes, dtype=tf.float32)
 
     if self.train:
-      image, boxes, classes = ssd_dataloader.ssd_crop(image, boxes, classes)
+      image, boxes, classes = ssd_dataloader.ssd_decode_and_crop(
+          image_buffer, boxes, classes, raw_shape)
+      # ssd_crop resizes and returns image of dtype float32 and does not change
+      # its range (i.e., value in between 0--255). Divide by 255. converts it
+      # to [0, 1] range. Not doing this before cropping to avoid dtype cast
+      # (which incurs additional memory copy).
+      image /= 255.
+
       image, boxes = preprocessor.random_horizontal_flip(
           image=image, boxes=boxes)
+      # Random horizontal flip probability is 50%
+      # See https://github.com/tensorflow/models/blob/master/research/object_detection/core/preprocessor.py  # pylint: disable=line-too-long
+      mlperf.logger.log(key=mlperf.tags.RANDOM_FLIP_PROBABILITY, value=0.5)
 
-      image = ssd_dataloader.color_jitter(
-          image, brightness=0.125, contrast=0.5, saturation=0.5, hue=0.05)
-      image = ssd_dataloader.normalize_image(image)
       image = tf.cast(image, self.dtype)
 
-      encoded_returns = ssd_dataloader.encode_labels(boxes, classes)
+      encoded_returns = ssd_encoder.encode_labels(boxes, classes)
       encoded_classes, encoded_boxes, num_matched_boxes = encoded_returns
 
       # Shape of image: [width, height, channel]
@@ -972,10 +1080,12 @@ class COCOPreprocessor(BaseImagePreprocessor):
       return (image, encoded_boxes, encoded_classes, num_matched_boxes)
 
     else:
+      image = tf.image.decode_jpeg(image_buffer)
       image = tf.image.resize_images(
-          image[tf.newaxis, :, :, :],
-          size=(ssd_constants.IMAGE_SIZE, ssd_constants.IMAGE_SIZE)
-      )[0, :, :, :]
+          image, size=(ssd_constants.IMAGE_SIZE, ssd_constants.IMAGE_SIZE))
+      # resize_image returns image of dtype float32 and does not change its
+      # range. Divide by 255 to convert image to [0, 1] range.
+      image /= 255.
 
       image = ssd_dataloader.normalize_image(image)
       image = tf.cast(image, self.dtype)
@@ -1011,7 +1121,7 @@ class COCOPreprocessor(BaseImagePreprocessor):
                      datasets_parallel_interleave_prefetch=None):
     """Creates a dataset for the benchmark."""
     try:
-      from object_detection.data_decoders import tf_example_decoder  # pylint: disable=g-import-not-at-top
+      import ssd_dataloader  # pylint: disable=g-import-not-at-top
     except ImportError:
       raise ImportError('To use the COCO dataset, you must clone the '
                         'repo https://github.com/tensorflow/models and add '
@@ -1021,20 +1131,21 @@ class COCOPreprocessor(BaseImagePreprocessor):
                         'master/research/object_detection/g3doc/installation.md'
                         '#protobuf-compilation')
     assert self.supports_datasets()
-    example_decoder = tf_example_decoder.TfExampleDecoder()
 
     glob_pattern = dataset.tf_record_pattern(subset)
-    file_names = gfile.Glob(glob_pattern)
-    if not file_names:
-      raise ValueError('Found no files in --data_dir matching: {}'
-                       .format(glob_pattern))
+    ds = tf.data.TFRecordDataset.list_files(glob_pattern, shuffle=train)
+    # TODO(haoyuzhang): Enable map+filter fusion after cl/218399112 in release
+    # options = tf.data.Options()
+    # options.experimental_optimization = tf.data.experimental.OptimizationOptions()  # pylint: disable=line-too-long
+    # options.experimental_optimization.map_and_filter_fusion = True
+    # ds = ds.with_options(options)
 
-    ds = tf.data.TFRecordDataset.list_files(file_names)
     ds = ds.apply(
-        interleave_ops.parallel_interleave(
+        tf.data.experimental.parallel_interleave(
             tf.data.TFRecordDataset,
             cycle_length=datasets_parallel_interleave_cycle_length or 10,
             sloppy=datasets_sloppy_parallel_interleave))
+    mlperf.logger.log(key=mlperf.tags.INPUT_ORDER)
     if datasets_repeat_cached_sample:
       # Repeat a single sample element indefinitely to emulate memory-speed IO.
       ds = ds.take(1).cache().repeat()
@@ -1042,19 +1153,21 @@ class COCOPreprocessor(BaseImagePreprocessor):
     if datasets_use_caching:
       ds = ds.cache()
     if train:
-      ds = ds.apply(tf.contrib.data.shuffle_and_repeat(buffer_size=10000))
+      ds = ds.apply(tf.data.experimental.shuffle_and_repeat(buffer_size=10000))
+      mlperf.logger.log(key=mlperf.tags.INPUT_SHARD, value=10000)
+      mlperf.logger.log(key=mlperf.tags.INPUT_ORDER)
     else:
       ds = ds.repeat()
 
-    ds = ds.map(example_decoder.decode, num_parallel_calls=64)
+    ds = ds.map(ssd_dataloader.ssd_parse_example_proto, num_parallel_calls=64)
     ds = ds.filter(
         lambda data: tf.greater(tf.shape(data['groundtruth_boxes'])[0], 0))
     ds = ds.apply(
-        batching.map_and_batch(
+        tf.data.experimental.map_and_batch(
             map_func=self.preprocess,
             batch_size=batch_size_per_split,
             num_parallel_batches=num_splits,
-            drop_remainder=True))
+            drop_remainder=train))
     ds = ds.prefetch(buffer_size=num_splits)
     if num_threads:
       ds = threadpool.override_threadpool(
@@ -1088,12 +1201,13 @@ class TestImagePreprocessor(BaseImagePreprocessor):
                shift_ratio=0,
                summary_verbosity=0,
                distort_color_in_yiq=False,
-               fuse_decode_and_crop=False):
+               fuse_decode_and_crop=False,
+               match_mlperf=False):
     super(TestImagePreprocessor, self).__init__(
         batch_size, output_shapes, num_splits, dtype, train, distortions,
         resize_method, shift_ratio, summary_verbosity=summary_verbosity,
         distort_color_in_yiq=distort_color_in_yiq,
-        fuse_decode_and_crop=fuse_decode_and_crop)
+        fuse_decode_and_crop=fuse_decode_and_crop, match_mlperf=match_mlperf)
     self.expected_subset = None
 
   def set_fake_data(self, fake_images, fake_labels):
@@ -1180,16 +1294,16 @@ class LibrispeechPreprocessor(InputPreprocessor):
     """Creates a dataset for the benchmark."""
     # TODO(laigd): currently the only difference between this and the one in
     # BaseImagePreprocessor is, this uses map() and padded_batch() while the
-    # latter uses batching.map_and_batch(). Try to merge them.
+    # latter uses tf.data.experimental.map_and_batch(). Try to merge them.
     assert self.supports_datasets()
     glob_pattern = dataset.tf_record_pattern(subset)
     file_names = gfile.Glob(glob_pattern)
     if not file_names:
       raise ValueError('Found no files in --data_dir matching: {}'
                        .format(glob_pattern))
-    ds = tf.data.TFRecordDataset.list_files(file_names)
+    ds = tf.data.TFRecordDataset.list_files(file_names, shuffle=train)
     ds = ds.apply(
-        interleave_ops.parallel_interleave(
+        tf.data.experimental.parallel_interleave(
             tf.data.TFRecordDataset,
             cycle_length=datasets_parallel_interleave_cycle_length or 10,
             sloppy=datasets_sloppy_parallel_interleave,
@@ -1204,7 +1318,7 @@ class LibrispeechPreprocessor(InputPreprocessor):
     if datasets_use_caching:
       ds = ds.cache()
     if train:
-      ds = ds.apply(tf.contrib.data.shuffle_and_repeat(buffer_size=10000))
+      ds = ds.apply(tf.data.experimental.shuffle_and_repeat(buffer_size=10000))
     else:
       ds = ds.repeat()
     ds = ds.map(map_func=self.parse_and_preprocess,

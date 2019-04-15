@@ -23,9 +23,14 @@ References:
      arXiv:1409.1556 (2014)
 """
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 from six.moves import xrange  # pylint: disable=redefined-builtin
 from models import model
 
+import tensorflow as tf # tf.layers.relu
 
 def _construct_vgg(cnn, num_conv_layers):
   """Build vgg architecture from blocks."""
@@ -77,3 +82,93 @@ class Vgg19Model(model.CNNModel):
 
   def add_inference(self, cnn):
     _construct_vgg(cnn, [2, 2, 4, 4, 4])
+
+
+#
+# Porting Keras VGG-16 model from:
+#
+#     https://github.com/geifmany/cifar-vgg
+#
+# On the Cifar-100 dataset the model reaches a validation accuracy of 70.48%.
+#
+class Vgg16ModelRevisited(model.Model):
+
+  def __init__(self):
+    super(Vgg16ModelRevisited, self).__init__('vgg16revisited', 32, 64, 0.005)
+
+  def skip_final_affine_layer(self):
+    return True
+
+  def add_inference(self, cnn):
+
+    y = cnn.top_layer
+    training = cnn.phase_train
+    nclasses = 100
+    data_format = "channels_first"
+    __DECAY = 0.99
+    __EPSILON = 0.001
+
+    # Stage 1 (2x Conv)
+    #
+    cnn.cbow_conv(64, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_dropout(rate=0.3)
+    cnn.cbow_conv(64, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_mpool([2, 2], [2, 2], padding="valid")
+
+    # Stage 2 (2x Conv)
+    #
+    cnn.cbow_conv(128, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_dropout(rate=0.4)
+    cnn.cbow_conv(128, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_mpool([2, 2], [2, 2], padding="valid")
+
+    # Stage 3 (3x Conv)
+    #
+    cnn.cbow_conv(256, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_dropout(rate=0.4)
+    cnn.cbow_conv(256, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_dropout(rate=0.4)
+    cnn.cbow_conv(256, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_mpool([2, 2], [2, 2], padding="valid")
+
+    # Stage 4 (3x Conv)
+    #
+    cnn.cbow_conv(512, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_dropout(rate=0.4)
+    cnn.cbow_conv(512, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_dropout(rate=0.4)
+    cnn.cbow_conv(512, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_mpool([2, 2], [2, 2], padding="valid")
+
+    # Stage 5 (3x Conv)
+    #
+    cnn.cbow_conv(512, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_dropout(rate=0.4)
+    cnn.cbow_conv(512, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_dropout(rate=0.4)
+    cnn.cbow_conv(512, [3, 3], padding="same", activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_mpool([2, 2], [2, 2], padding="valid")
+
+    # End
+    #
+    cnn.cbow_dropout(rate=0.5)
+    # Flatten (input shape is b x 512 x 1 x 1)
+    flattened = tf.reshape(cnn.top_layer, [-1, 512 * 1 * 1])
+    cnn.top_layer = flattened
+    cnn.cbow_dense(512, activation=tf.nn.relu)
+    cnn.cbow_norm(axis=1, momentum=__DECAY, epsilon=__EPSILON, fused=True)
+    cnn.cbow_dropout(rate=0.5)
+    cnn.cbow_dense(nclasses, activation=None)

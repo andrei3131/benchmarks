@@ -16,6 +16,10 @@
 """Model configurations for CNN benchmarks.
 """
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 from functools import partial
 
 from models import alexnet_model
@@ -105,7 +109,8 @@ _model_name_to_cifar_model = {
 
 
 _model_name_to_object_detection_model = {
-    'ssd300': ssd_model.SSD300Model
+    'ssd300': ssd_model.SSD300Model,
+    'trivial': trivial_model.TrivialSSD300Model,
 }
 
 

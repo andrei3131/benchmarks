@@ -17,6 +17,8 @@
 See the README for more information.
 """
 
+from __future__ import absolute_import
+from __future__ import division
 from __future__ import print_function
 
 import argparse
@@ -30,6 +32,8 @@ import threading
 import time
 import traceback
 
+import sys
+
 from absl import flags as absl_flags
 import numpy as np
 
@@ -41,6 +45,7 @@ import cnn_util
 import constants
 import datasets
 import flags
+import mlperf
 import variable_mgr
 import variable_mgr_util
 from cnn_util import log_fn
@@ -51,7 +56,6 @@ from tensorflow.contrib.compiler import xla
 from tensorflow.core.protobuf import rewriter_config_pb2
 from tensorflow.python import debug as tf_debug
 from tensorflow.python.client import timeline
-from tensorflow.python.data.experimental.ops import prefetching_ops
 from tensorflow.python.framework import graph_util
 from tensorflow.python.framework import graph_util_impl
 from tensorflow.python.framework import importer
@@ -61,6 +65,13 @@ from tensorflow.python.util import nest
 
 
 _DEFAULT_NUM_BATCHES = 100
+
+#
+# Alexandros Koliousis (20 March 2019)
+#
+_DEBUG = False
+_DEBUG_TRAINING = False
+_DEBUG_TEST = False
 
 # GraphInfo encapsulates the tensors/ops that we care about after building a
 # graph. We use them to benchmark the graph.
@@ -85,7 +96,7 @@ GraphInfo = namedtuple(  # pylint: disable=invalid-name
 
 
 # InputProcessingInfo contains various sources of inputs which will be later fed
-# into the model. If synthetic data is used, all four fields are None.
+# into the model. If synthetic data is used, all three fields are None.
 InputProcessingInfo = namedtuple(
     'InputProcessingInfo',
     [
@@ -97,12 +108,8 @@ InputProcessingInfo = namedtuple(
         # A list of StagingArea for each device.
         'input_producer_stages',
 
-        # Input produced using FunctionBufferingResource. Non-None iff datasets
-        # prefetching is used and --use_multi_device_iterator=False
-        'function_buffering_resources',
-
         # Input produced using multi device iterator. Non-None iff datasets
-        # prefetching is used and --use_multi_device_iterator=True
+        # prefetching is used
         'multi_device_iterator_input'
     ])
 
@@ -158,11 +165,15 @@ flags.DEFINE_boolean('print_training_accuracy', False,
                      'training')
 flags.DEFINE_integer('batch_size', 0, 'batch size per compute device')
 
-# Ako
+
+#
+# Andrei-Octavian Brabete
+# Synchronization Strategy Flags
 flags.DEFINE_integer('ako_partitions', 1, 'number of Ako partitions')
 flags.DEFINE_string('kungfu_strategy', 'parallel',
-		    'Name of KungFu strategy: parallel or ako. If not specified, default is ako')
+		                'Name of KungFu strategy: parallel or ako. If not specified, default is ako')        
 
+flags.DEFINE_integer('eval_batch_size', 0, 'eval batch size per compute device')
 flags.DEFINE_integer('batch_group_size', 1,
                      'number of groups of batches processed in the image '
                      'producer.')
@@ -181,15 +192,27 @@ flags.DEFINE_float('stop_at_top_1_accuracy', None,
                    'If set, stops training after the evaluation accuracy hits '
                    'this number. Can only be used with one of the '
                    '--eval_during_training_* flags.')
+flags.DEFINE_boolean('collect_eval_results_async', False,
+                     'If True, start a separate process to postprocess eval '
+                     'results asynchronously. This currently only works with '
+                     'the SSD model.')
 flags.DEFINE_integer('num_warmup_batches', None,
                      'number of batches to run before timing')
 flags.DEFINE_integer('autotune_threshold', None,
                      'The autotune threshold for the models')
+# TODO(tucker): change num_gpus to num_devices
 flags.DEFINE_integer('num_gpus', 1, 'the number of GPUs to run on')
 flags.DEFINE_string('gpu_indices', '', 'indices of worker GPUs in ring order')
 flags.DEFINE_integer('display_every', 10,
                      'Number of local steps after which progress is printed '
                      'out')
+flags.DEFINE_float('display_perf_ewma', None,
+                   'If set, display numbers of images/sec using exponentially '
+                   'weighted moving avearge with the specified weight, which '
+                   'defines how much current value contributes to the reported '
+                   'average. Increasing weight makes the reported performance '
+                   'number reflect more about the real-time speed instead of '
+                   'the entire history', lower_bound=0, upper_bound=1)
 flags.DEFINE_string('data_dir', None,
                     'Path to dataset in TFRecord format (aka Example '
                     'protobufs). If not specified, synthetic data will be '
@@ -268,10 +291,15 @@ flags.DEFINE_enum('data_format', 'NCHW', ('NHWC', 'NCHW'),
                   'native, requires GPU).')
 flags.DEFINE_integer('num_intra_threads', None,
                      'Number of threads to use for intra-op parallelism. If '
-                     'set to 0, the system will pick an appropriate number.')
+                     'set to 0, the system will pick an appropriate number. '
+                     'None is the same as 0 except that it disables intra-op '
+                     'parallelism on a GPU.')
 flags.DEFINE_integer('num_inter_threads', 0,
                      'Number of threads to use for inter-op parallelism. If '
                      'set to 0, the system will pick an appropriate number.')
+flags.DEFINE_boolean('use_numa_affinity', False,
+                     'Whether to turn on NUMA affinity for CPU devices. '
+                     'This is probably only useful when --device=cpu.')
 flags.DEFINE_string('trace_file', '',
                     'Enable TensorFlow tracing and write trace to this file.')
 flags.DEFINE_boolean('use_chrome_trace_format', True,
@@ -327,6 +355,9 @@ flags.DEFINE_float('minimum_learning_rate', 0,
                    'never decay past this value. Requires `learning_rate`, '
                    '`num_epochs_per_decay` and `learning_rate_decay_factor` to '
                    'be set.')
+flags.DEFINE_float('resnet_base_lr', None, "Base learning rate at bs=256. Only "
+                   "relevant when training ResNet and utilizing the model's "
+                   "learning rate heuristic (get_learning_rate).")
 flags.DEFINE_float('momentum', 0.9, 'Momentum for training.')
 flags.DEFINE_float('rmsprop_decay', 0.9, 'Decay term for RMSProp.')
 flags.DEFINE_float('rmsprop_momentum', 0.9, 'Momentum in RMSProp.')
@@ -343,11 +374,20 @@ flags.DEFINE_float('gpu_memory_frac_for_testing', 0,
                    'Useful for testing the benchmark script, as this allows '
                    'distributed mode to be run on a single machine. For '
                    'example, if there are two tasks, each can be allocated '
-                   '~40 percent of the memory on a single machine',
-                   lower_bound=0., upper_bound=1.)
-flags.DEFINE_boolean('use_unified_memory', False,
+                   '~40 percent of the memory on a single machine. This is '
+                   'also useful for using unified memory, as this can be set '
+                   'above 1 to oversubscribe the GPU using unified memory.',
+                   lower_bound=0.)
+flags.DEFINE_boolean('use_unified_memory', None,
                      'If True, allocate unified memory enabling larger models '
                      'to fit in available device RAM.')
+flags.DEFINE_boolean('timestamped_allocator', False,
+                     'If True marks free BFCAllocator::Chunks with time '
+                     'at which they are freed which can allow more efficient '
+                     'memory allocation in cases like RDMA networking.')
+flags.DEFINE_integer('gpu_pending_cap', 0, 'If > 0 then then number of pending '
+                     '(queued but not yet known to have terminated) kernels '
+                     'per GPU device will be capped to this number.')
 flags.DEFINE_boolean('use_tf_layers', True,
                      'If True, use tf.layers for neural network layers. This '
                      'should not affect performance or accuracy in any way.')
@@ -362,6 +402,17 @@ flags.DEFINE_string('debugger', None,
                     'the experimental TensorBoard debugger will be used')
 flags.DEFINE_boolean('use_python32_barrier', False,
                      'When on, use threading.Barrier at Python 3.2.')
+
+flags.DEFINE_boolean('ml_perf', False,
+                     'When True, change how the Imagenet input pipeline works '
+                     'slightly to meet the MLPerf compliance rules. This slows '
+                     'down the input pipeline. Without this option, at the end '
+                     'of the input pipeline, the image is divided by 127.5, '
+                     'then 1.0 is subtracted from it, bringing the image '
+                     'values from [0, 255] to [-1.0, 1.0]. With this option, '
+                     'each of the three channels (red, green, blue) have the '
+                     'average channel value among all image subtracted from '
+                     'it, and no division is done.')
 
 flags.DEFINE_boolean('datasets_use_prefetch', True,
                      'Enable use of prefetched datasets for input pipeline. '
@@ -388,11 +439,6 @@ flags.DEFINE_integer('datasets_parallel_interleave_prefetch', None,
                      'The number of input elements to fetch before they are '
                      'needed for interleaving.')
 
-flags.DEFINE_boolean(
-    'use_multi_device_iterator', True,
-    'If true, we use the MultiDeviceIterator for prefetching, '
-    'which deterministically prefetches the data onto the '
-    'various GPUs')
 flags.DEFINE_integer(
     'multi_device_iterator_max_buffer_size', 1,
     'Configuration parameter for the MultiDeviceIterator that '
@@ -635,6 +681,16 @@ flags.DEFINE_string('benchmark_test_id', None,
                     'consumption, and does not have any impact within the '
                     'system.')
 
+#
+# (Alexandros Koliousis, 19 March 2019)
+#
+# Add support for custom checkpointing.
+#
+flags.DEFINE_boolean('checkpoint_every_n_epochs', True, '')
+flags.DEFINE_float  ('checkpoint_interval', 0, '')
+flags.DEFINE_string ('checkpoint_directory', 'checkpoints', '')
+flags.DEFINE_integer('checkpoint_version',  1, '')
+
 platforms_util.define_platform_params()
 
 
@@ -689,6 +745,23 @@ class GlobalStepWatcher(threading.Thread):
 class CheckpointNotFoundException(Exception):
   pass
 
+#
+# Alexandros Koliousis (20 March 2019)
+#
+# Create custom checkpoint directory.
+#
+def _checkpoint_path(root, version):
+    v = version
+    while True:
+        directory = os.path.join(root, ('v-%06d' % (v)))
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+            break
+        # Increment version and try again
+        v += 1
+
+    filepath = os.path.join(directory, 'model.ckpt')
+    return filepath, v
 
 def create_config_proto(params):
   """Returns session config proto.
@@ -706,44 +779,35 @@ def create_config_proto(params):
     config.intra_op_parallelism_threads = params.num_intra_threads
   config.inter_op_parallelism_threads = params.num_inter_threads
   config.experimental.collective_group_leader = '/job:worker/replica:0/task:0'
+  config.gpu_options.experimental.collective_ring_order = params.gpu_indices
   config.gpu_options.force_gpu_compatible = params.force_gpu_compatible
+  config.experimental.use_numa_affinity = params.use_numa_affinity
+  if params.device == 'cpu':
+    # TODO(tucker): change num_gpus to num_devices
+    config.device_count['CPU'] = params.num_gpus
   if params.allow_growth is not None:
     config.gpu_options.allow_growth = params.allow_growth
   if params.gpu_memory_frac_for_testing > 0:
     config.gpu_options.per_process_gpu_memory_fraction = (
         params.gpu_memory_frac_for_testing)
   if params.use_unified_memory:
-    config.gpu_options.experimental.use_unified_memory = True
+    config.gpu_options.experimental.use_unified_memory = (
+        params.use_unified_memory)
+  if params.timestamped_allocator:
+    config.gpu_options.experimental.timestamped_allocator = (
+        params.timestamped_allocator)
+  if params.gpu_pending_cap > 0:
+    config.gpu_options.experimental.pending_cap = params.gpu_pending_cap
   if params.xla:
     config.graph_options.optimizer_options.global_jit_level = (
         tf.OptimizerOptions.ON_1)
-    # TODO(b/117324590): Re-enable PinToHostOptimizer when b/117324590 is fixed.
-    # Currently we have to disable PinToHostOptimizer w/ XLA since it causes
-    # OOM/perf cliffs.
-    config.graph_options.rewrite_options.pin_to_host_optimization = (
-        rewriter_config_pb2.RewriterConfig.OFF)
   if params.rewriter_config:
     rewriter_config = rewriter_config_pb2.RewriterConfig()
     text_format.Merge(params.rewriter_config, rewriter_config)
     config.graph_options.rewrite_options.CopyFrom(rewriter_config)
   elif not params.enable_optimizations:
-    off = rewriter_config_pb2.RewriterConfig.OFF
     config.graph_options.optimizer_options.opt_level = tf.OptimizerOptions.L0
-    rewrite_options = config.graph_options.rewrite_options
-    rewrite_options.layout_optimizer = off
-    rewrite_options.constant_folding = off
-    rewrite_options.shape_optimization = off
-    rewrite_options.remapping = off
-    rewrite_options.arithmetic_optimization = off
-    rewrite_options.dependency_optimization = off
-    rewrite_options.loop_optimization = off
-    rewrite_options.function_optimization = off
-    rewrite_options.debug_stripper = off
-    rewrite_options.disable_model_pruning = True
-    rewrite_options.scoped_allocator_optimization = off
-    rewrite_options.memory_optimization = (
-        rewriter_config_pb2.RewriterConfig.NO_MEM_OPT)
-    rewrite_options.pin_to_host_optimization = off
+    config.graph_options.rewrite_options.disable_meta_optimizer = True
   elif params.variable_update == 'collective_all_reduce':
     rewrite_options = config.graph_options.rewrite_options
     rewrite_options.scoped_allocator_optimization = (
@@ -752,7 +816,17 @@ def create_config_proto(params):
   if params.variable_update == 'horovod':
     import horovod.tensorflow as hvd  # pylint: disable=g-import-not-at-top
     config.gpu_options.visible_device_list = str(hvd.local_rank())
+  # For collective_all_reduce, ignore all devices except current worker.
+  if params.variable_update == 'collective_all_reduce':
+    del config.device_filters[:]
+    config.device_filters.append(
+        '/job:%s/replica:0/task:%d' % (params.job_name, params.task_index))
 
+  # TODO(b/117324590): Re-enable PinToHostOptimizer when b/117324590 is fixed.
+  # Currently we have to disable PinToHostOptimizer w/ XLA since it causes
+  # OOM/perf cliffs.
+  config.graph_options.rewrite_options.pin_to_host_optimization = (
+      rewriter_config_pb2.RewriterConfig.OFF)
   return config
 
 
@@ -785,10 +859,20 @@ def get_mode_from_params(params):
 LOSS_AND_ACCURACY_DIGITS_TO_SHOW = 3
 
 
+# 
+# Alexandros Koliousis (25 March 2019)
+# 
+# Modify function signature to include:
+# a) global_start_time
+# b) saver
+# c) filepath
+# d) checkpoint_interval
+#
 def benchmark_one_step(sess,
                        fetches,
                        step,
                        batch_size,
+                       global_start_time,
                        step_train_times,
                        trace_filename,
                        partitioned_graph_file_prefix,
@@ -798,7 +882,10 @@ def benchmark_one_step(sess,
                        summary_op=None,
                        show_images_per_sec=True,
                        benchmark_logger=None,
-                       collective_graph_key=0):
+                       collective_graph_key=0,
+                       saver=None,
+                       filepath=None,
+                       checkpoint_interval=None):
   """Advance one step of benchmarking."""
   should_profile = profiler and 0 <= step < _NUM_STEPS_TO_PROFILE
   need_options_and_metadata = (
@@ -831,21 +918,36 @@ def benchmark_one_step(sess,
     lossval = 0.
   if image_producer is not None:
     image_producer.notify_image_consumption()
+
   train_time = time.time() - start_time
   step_train_times.append(train_time)
+
+  # Display statistics
   if (show_images_per_sec and step >= 0 and
       (step == 0 or (step + 1) % params.display_every == 0)):
+
     speed_mean, speed_uncertainty, speed_jitter = get_perf_timing(
-        batch_size, step_train_times)
-    log_str = '%i\t%s\t%.*f' % (
+        batch_size, step_train_times, params.display_perf_ewma)
+
+    # Alexandros Koliousis (26 March 2019)
+    # Modify print-out a little bit...
+    delta = time.time() - global_start_time
+
+    log_str = '[%10.3f]\t%6i\t%7i\t%s\t%.*f' % (
+        sum(step_train_times),
+        delta,
         step + 1,
         get_perf_timing_str(speed_mean, speed_uncertainty, speed_jitter),
         LOSS_AND_ACCURACY_DIGITS_TO_SHOW, lossval)
+
     if 'top_1_accuracy' in results:
       log_str += '\t%.*f\t%.*f' % (
           LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
           LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
+
     log_fn(log_str)
+    sys.stdout.flush()
+
     if benchmark_logger:
       benchmark_logger.log_metric(
           'current_examples_per_sec', speed_mean, global_step=step + 1)
@@ -883,6 +985,42 @@ def benchmark_one_step(sess,
             'text' if as_text else 'binary',
             os.path.join(path, graph_filename)))
         tf.train.write_graph(graph_def, path, graph_filename, as_text)
+  #
+  # Alexandros Koliousis (25 March 2019)
+  #
+  # Checkpoint model every N steps
+  #
+  if params.checkpoint_every_n_epochs:
+    # print("DBG> Try checkpoint at %d/%d steps" % (step, checkpoint_interval))
+    if (step >= 0 and (step == 0 or (step + 1) % checkpoint_interval == 0)):
+      # print("DBG>", "%d/%d" % (step, checkpoint_interval))
+      sys.stdout.flush()
+      # Have we displayed statistics in this step?
+      if ((step + 1) % params.display_every != 0):
+        # Display statistics since we want to correlate them with evaluation results
+        speed_mean, speed_uncertainty, speed_jitter = get_perf_timing(
+          batch_size, step_train_times, params.display_perf_ewma)
+        
+        delta = time.time() - global_start_time
+        
+        log_str = '[%10.3f]\t%6i\t%7i\t%s\t%.*f' % (
+          sum(step_train_times),
+          delta,
+          step + 1, 
+          get_perf_timing_str(speed_mean, speed_uncertainty, speed_jitter),
+          LOSS_AND_ACCURACY_DIGITS_TO_SHOW, lossval)
+        if 'top_1_accuracy' in results:
+          log_str += '\t%.*f\t%.*f' % (
+            LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
+            LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
+        log_fn(log_str)
+      # Save the model checkpoint periodically
+      if not (saver and filepath):
+        raise ValueError("Undefined saver & filepath")
+      print("DBG> Checkpoint at step", (step + 1))
+      sys.stdout.flush()
+      saver.save(sess, filepath, global_step=(step + 1), write_state=False)
+
   return (summary_str, lossval)
 
 
@@ -895,10 +1033,16 @@ def get_perf_timing_str(speed_mean, speed_uncertainty, speed_jitter, scale=1):
     return 'images/sec: %.1f' % speed_mean
 
 
-def get_perf_timing(batch_size, step_train_times, scale=1):
+def get_perf_timing(batch_size, step_train_times, ewma_alpha=None, scale=1):
+  """Calculate benchmark processing speed."""
   times = np.array(step_train_times)
   speeds = batch_size / times
-  speed_mean = scale * batch_size / np.mean(times)
+  if ewma_alpha:
+    weights = np.logspace(len(times)-1, 0, len(times), base=1-ewma_alpha)
+    time_mean = np.average(times, weights=weights)
+  else:
+    time_mean = np.mean(times)
+  speed_mean = scale * batch_size / time_mean
   speed_uncertainty = np.std(speeds) / np.sqrt(float(len(speeds)))
   speed_jitter = 1.4826 * np.median(np.abs(speeds - np.median(speeds)))
   return speed_mean, speed_uncertainty, speed_jitter
@@ -1058,11 +1202,11 @@ def get_num_batches_and_epochs(params, batch_size, num_examples_per_epoch):
     raise ValueError('At most one of --num_batches and --num_epochs may be '
                      'specified.')
   if params.num_epochs:
-    num_batches = int(float(params.num_epochs) * num_examples_per_epoch /
-                      batch_size)
+    num_batches = int(params.num_epochs * num_examples_per_epoch +
+                      batch_size - 1) // batch_size
   else:
     num_batches = params.num_batches or _DEFAULT_NUM_BATCHES
-  num_epochs = num_batches * batch_size / float(num_examples_per_epoch)
+  num_epochs = num_batches * batch_size / num_examples_per_epoch
   return (num_batches, num_epochs)
 
 
@@ -1124,7 +1268,7 @@ def get_learning_rate(params, global_step, num_examples_per_epoch, model,
     ValueError: Invalid or unsupported params.
   """
   with tf.name_scope('learning_rate'):
-    num_batches_per_epoch = (float(num_examples_per_epoch) / batch_size)
+    num_batches_per_epoch = num_examples_per_epoch / batch_size
 
     if params.piecewise_learning_rate_schedule:
       if (params.init_learning_rate is not None or
@@ -1168,15 +1312,21 @@ def get_learning_rate(params, global_step, num_examples_per_epoch, model,
       learning_rate = tf.cond(global_step < warmup_steps,
                               lambda: warmup_lr, lambda: learning_rate)
 
+    learning_rate = mlperf.logger.log_deferred_tensor_value(
+        mlperf.tags.OPT_LR, learning_rate, global_step, every_n=100)
   return learning_rate
 
 
 def get_optimizer(params, learning_rate):
   """Returns the optimizer that should be used based on params."""
   if params.optimizer == 'momentum':
+    mlperf.logger.log(key=mlperf.tags.OPT_NAME,
+                      value=mlperf.tags.SGD_WITH_MOMENTUM)
+    mlperf.logger.log(key=mlperf.tags.OPT_MOMENTUM, value=params.momentum)
     opt = tf.train.MomentumOptimizer(
         learning_rate, params.momentum, use_nesterov=True)
   elif params.optimizer == 'sgd':
+    mlperf.logger.log(key=mlperf.tags.OPT_NAME, value=mlperf.tags.SGD)
     opt = tf.train.GradientDescentOptimizer(learning_rate)
   elif params.optimizer == 'rmsprop':
     opt = tf.train.RMSPropOptimizer(
@@ -1188,8 +1338,8 @@ def get_optimizer(params, learning_rate):
     opt = tf.train.AdamOptimizer(learning_rate, params.adam_beta1,
                                  params.adam_beta2, params.adam_epsilon)
   else:
-    raise ValueError('Optimizer "%s" was not recognized',
-                     params.optimizer)
+    raise ValueError('Optimizer "{}" was not recognized'.
+                     format(params.optimizer))
   return opt
 
 
@@ -1232,6 +1382,7 @@ class BenchmarkCNN(object):
     Raises:
       ValueError: Unsupported params settings.
     """
+    mlperf.logger.log(key=mlperf.tags.RUN_START)
     self.params = params
     if params.eval:
       self._doing_eval = True
@@ -1243,6 +1394,16 @@ class BenchmarkCNN(object):
                                                       self.params.data_name)
     self.model = model or model_config.get_model_config(
         self.params.model, self.dataset, self.params)
+
+    #
+    # Alexandros Koliousis (25 March 2019)
+    #
+    # Create checkpoint directory
+    if not self.params.eval:
+        self.filepath, self.version = _checkpoint_path(params.checkpoint_directory,
+                params.checkpoint_version)
+        print("DBG>", "%s (v. %d)" % (self.filepath, self.version))
+
     self.trace_filename = self.params.trace_file
     self.rewriter_config = self.params.rewriter_config
     autotune_threshold = self.params.autotune_threshold if (
@@ -1348,6 +1509,9 @@ class BenchmarkCNN(object):
     if params.stop_at_top_1_accuracy and not eval_during_training_enabled:
       raise ValueError('--stop_at_top_1_accuracy is only supported with '
                        '--eval_during_training_*')
+    if params.collect_eval_results_async and params.model != 'ssd300':
+      raise ValueError('--collect_eval_results_async only works with ssd300 '
+                       'model currently.')
     if self.params.forward_only and self.params.freeze_when_forward_only:
       if self.params.train_dir is not None:
         raise ValueError('In forward_only mode, when --freeze_when_forward_only'
@@ -1368,19 +1532,33 @@ class BenchmarkCNN(object):
                          '--forward_only and --freeze_when_forward_only is set '
                          'to False')
 
+    self.mode = get_mode_from_params(self.params)
+
     # Use the batch size from the command line if specified, otherwise use the
     # model's default batch size.  Scale the benchmark's batch size by the
     # number of GPUs.
     if self.params.batch_size > 0:
       self.model.set_batch_size(self.params.batch_size)
     self.batch_size = self.model.get_batch_size() * self.num_gpus
+    if self.mode in (constants.BenchmarkMode.TRAIN,
+                     constants.BenchmarkMode.TRAIN_AND_EVAL):
+      self.train_batch_size = self.batch_size
+    else:
+      self.train_batch_size = None
+    if self.mode in (constants.BenchmarkMode.EVAL,
+                     constants.BenchmarkMode.TRAIN_AND_EVAL):
+      if self.params.eval_batch_size > 0:
+        self.eval_batch_size = self.params.eval_batch_size * self.num_gpus
+      else:
+        self.eval_batch_size = self.batch_size
+    else:
+      self.eval_batch_size = None
     self.batch_group_size = self.params.batch_group_size
     self.enable_auto_loss_scale = (
         self.params.use_fp16 and self.params.fp16_enable_auto_loss_scale)
     self.loss_scale = None
     self.loss_scale_normal_steps = None
 
-    self.mode = get_mode_from_params(self.params)
     self.job_name = self.params.job_name  # "" for local training
 
     # PS server is used for distributed jobs not using all-reduce.
@@ -1471,7 +1649,7 @@ class BenchmarkCNN(object):
             num_batches=self.params.num_eval_batches,
             num_epochs=self.params.num_eval_epochs)
       self.num_eval_batches, self.num_eval_epochs = get_num_batches_and_epochs(
-          eval_params, self.batch_size * self.num_workers,
+          eval_params, self.eval_batch_size * self.num_workers,
           self.dataset.num_examples_per_epoch('validation'))
     else:
       self.num_eval_batches, self.num_eval_epochs = None, None
@@ -1495,8 +1673,12 @@ class BenchmarkCNN(object):
 
     if self.params.eval_during_training_at_specified_epochs:
       try:
-        n_epochs = map(
-            float, self.params.eval_during_training_at_specified_epochs)
+        n_epochs = list(map(
+            float, self.params.eval_during_training_at_specified_epochs))
+        offset = n_epochs[0] - 1
+        if offset.is_integer():
+          offset = int(offset)
+        mlperf.logger.log(key=mlperf.tags.EVAL_EPOCH_OFFSET, value=offset)
         self.eval_during_training_at_specified_steps = {
             (int(e * num_train_examples_per_epoch + self.batch_size - 1) //
              self.batch_size)
@@ -1505,6 +1687,25 @@ class BenchmarkCNN(object):
         raise ValueError('Param eval_during_training_at_specified_epochs value '
                          'of %s cannot be converted to a list of floats.' %
                          (self.params.eval_during_training_at_specified_epochs))
+
+    if params.eval_during_training_every_n_epochs:
+      offset = params.eval_during_training_every_n_epochs - 1
+      if offset.is_integer():
+        offset = int(offset)
+      mlperf.logger.log(key=mlperf.tags.EVAL_EPOCH_OFFSET, value=offset)
+
+    #
+    # Alexandros Koliousis (25 March 2019)
+    #
+    print("DBG>", "Train for %d iterations or %d epochs" % (self.num_batches, self.num_epochs))
+    print("DBG>", "Approximately %d iterations per epoch" % (self.dataset.num_examples_per_epoch(subset) / self.batch_size))
+
+    self.checkpoint_interval = int(params.checkpoint_interval * (self.dataset.num_examples_per_epoch(subset) / self.batch_size))
+    print("DBG>", "Checkpoint every %d iterations" % self.checkpoint_interval)
+
+    if (self.params.checkpoint_every_n_epochs and self.checkpoint_interval == 0):
+      raise ValueError("Undefined checkpoint interval")
+
 
     if (self.params.staged_vars and
         self.params.variable_update != 'parameter_server'):
@@ -1623,15 +1824,20 @@ class BenchmarkCNN(object):
     old_doing_eval = self._doing_eval
     old_num_batches = self.num_batches
     old_num_epochs = self.num_epochs
+    old_batch_size = self.batch_size
     try:
       self._doing_eval = True
       self.num_batches = self.num_eval_batches
       self.num_epochs = self.num_eval_epochs
+      self.batch_size = self.eval_batch_size
+      self.model.set_batch_size(self.eval_batch_size // self.num_gpus)
       yield
     finally:
       self._doing_eval = old_doing_eval
       self.num_batches = old_num_batches
       self.num_epochs = old_num_epochs
+      self.batch_size = old_batch_size
+      self.model.set_batch_size(old_batch_size // self.num_gpus)
 
   def _config_benchmark_logger(self):
     """Config the model garden benchmark logger."""
@@ -1682,7 +1888,7 @@ class BenchmarkCNN(object):
     log_fn('Mode:        %s' % self.mode)
     log_fn('SingleSess:  %s' % benchmark_info['single_session'])
     log_fn('Batch size:  %s global' % (self.batch_size * self.num_workers))
-    log_fn('             %s per device' % (self.batch_size /
+    log_fn('             %s per device' % (self.batch_size //
                                            len(self.raw_devices)))
     if self.batch_group_size > 1:
       log_fn('             %d batches per prepocessing group' %
@@ -1690,6 +1896,7 @@ class BenchmarkCNN(object):
     log_fn('Num batches: %d' % self.num_batches)
     log_fn('Num epochs:  %.2f' % self.num_epochs)
     log_fn('Devices:     %s' % benchmark_info['device_list'])
+    log_fn('NUMA bind:   %s' % self.params.use_numa_affinity)
     log_fn('Data format: %s' % self.params.data_format)
     if self.rewriter_config:
       log_fn('RewriterConfig: %s' % self.rewriter_config)
@@ -1745,7 +1952,7 @@ class BenchmarkCNN(object):
           'single_sess': benchmark_info['single_session'],
           'devices': benchmark_info['device_list'],
           'batch_size': self.batch_size,
-          'batch_size_per_device': self.batch_size / len(self.raw_devices),
+          'batch_size_per_device': self.batch_size // len(self.raw_devices),
           'num_batches': self.num_batches,
           'num_epochs': self.num_epochs,
           'data_format': self.params.data_format,
@@ -1788,7 +1995,9 @@ class BenchmarkCNN(object):
     if self._doing_eval:
       with tf.Graph().as_default():
         # TODO(laigd): freeze the graph in eval mode.
-        return self._run_eval()
+        # Alexandros Koliousis (27 March 2019)
+        # return self._run_eval()
+        return self._run_eval_modified()
     else:
       return self._benchmark_train()
 
@@ -1830,6 +2039,54 @@ class BenchmarkCNN(object):
           break
         time.sleep(self.params.eval_interval_secs)
     return {}
+
+  def _run_eval_modified(self):
+
+    info = self._build_eval_graph()
+    saver = tf.train.Saver(self.variable_mgr.savable_variables())
+    writer = tf.summary.FileWriter(self.params.eval_dir, tf.get_default_graph())
+    target = ''
+
+    pattern = os.path.join(self.params.checkpoint_directory, 'model.ckpt-*.index')
+    filenames = gfile.Glob(pattern)
+    if not filenames:
+      raise ValueError('No files found matching {}'.format(pattern))
+    filenames = sorted(filenames, key=lambda x: int(x.split('-')[-1].split('.')[0]))
+
+    for filename in filenames:
+
+      with tf.Session(target=target, config=create_config_proto(self.params)) as session:
+
+        if not filename.endswith(".index"):
+          raise ValueError("Fatal error")
+        checkpoint = filename[:-len(".index")]
+        step = int(checkpoint.split("-")[-1])
+
+        try:
+            saver.restore(session, checkpoint)
+        except:
+            log_fn('Failed to restore checkpoint %s' % checkpoint)
+
+        image_producer = self._initialize_eval_graph(info.enqueue_ops,
+                                                     info.input_producer_op,
+                                                     info.local_var_init_op_group,
+                                                     session)
+
+        self._eval_once(session,
+                        writer,
+                        info.fetches,
+                        info.summary_op,
+                        image_producer,
+                        step)
+        
+        image_producer.done()
+        
+        if _DEBUG_TEST:
+          print("DBG> Exit after 1 test")
+          break
+
+    return {}
+
 
   def _build_eval_graph(self, scope_name=None):
     """Build the evaluation graph.
@@ -1901,16 +2158,25 @@ class BenchmarkCNN(object):
             image_producer.notify_image_consumption()
       return image_producer
 
+  # Alexandros Koliousis (27 March 2019)
+  #
+  # Evaluate 1 checkpoint
+  #
   def _eval_once(self, sess, summary_writer, fetches, summary_op,
                  image_producer, global_step):
     """Evaluate the model using the validation dataset."""
     with self._do_eval():
+      mlperf.logger.log_eval_epoch(
+          mlperf.tags.EVAL_START, global_step, self.batch_size)
       loop_start_time = start_time = time.time()
       # TODO(laigd): refactor the part to compute/report the accuracy. Currently
       # it only works for image models.
       top_1_accuracy_sum = 0.0
       top_5_accuracy_sum = 0.0
       total_eval_count = self.num_batches * self.batch_size
+
+      print("DBG> %d batches %d images/batch %d images" % (self.num_batches, self.batch_size, total_eval_count))
+
       for step in xrange(self.num_batches):
         if (summary_writer and self.params.save_summaries_steps > 0 and
             (step + 1) % self.params.save_summaries_steps == 0):
@@ -1923,6 +2189,7 @@ class BenchmarkCNN(object):
         results = self.model.postprocess(results)
         top_1_accuracy_sum += results['top_1_accuracy']
         top_5_accuracy_sum += results['top_5_accuracy']
+
         if (step + 1) % self.params.display_every == 0:
           duration = time.time() - start_time
           examples_per_sec = (
@@ -1946,6 +2213,8 @@ class BenchmarkCNN(object):
         summary_writer.add_summary(summary, global_step)
       log_fn('Accuracy @ 1 = %.4f Accuracy @ 5 = %.4f [%d examples]' %
              (accuracy_at_1, accuracy_at_5, total_eval_count))
+      # Flush
+      sys.stdout.flush()
       elapsed_time = loop_end_time - loop_start_time
       images_per_sec = (self.num_batches * self.batch_size / elapsed_time)
       if self.mode != constants.BenchmarkMode.TRAIN_AND_EVAL:
@@ -1962,7 +2231,19 @@ class BenchmarkCNN(object):
             tf.GraphKeys.GLOBAL_STEP, global_step,
         }
         self.benchmark_logger.log_evaluation_result(eval_result)
+      mlperf.logger.log_eval_epoch(
+          mlperf.tags.EVAL_STOP, global_step, self.batch_size)
+      mlperf.logger.log(key=mlperf.tags.EVAL_SIZE,
+                        value=self.num_batches * self.batch_size)
+      if self.params.model != 'ssd300':  # ssd300 logs eval accuracy elsewhere.
+        mlperf.logger.log_eval_accuracy(
+            accuracy_at_1, global_step, self.train_batch_size,
+            examples_per_epoch=self.dataset.num_examples_per_epoch('train'))
+      if self.params.stop_at_top_1_accuracy:
+        mlperf.logger.log(key=mlperf.tags.EVAL_TARGET,
+                          value=self.params.stop_at_top_1_accuracy)
       return accuracy_at_1, accuracy_at_5
+
 
   def _benchmark_train(self):
     """Run cnn in benchmark mode. Skip the backward pass if forward_only is on.
@@ -2278,7 +2559,7 @@ class BenchmarkCNN(object):
       # init_global_step by num_workers only in non-single session mode.
       end_local_step = self.num_batches - self.init_global_step
     else:
-      end_local_step = self.num_batches - (self.init_global_step /
+      end_local_step = self.num_batches - (self.init_global_step //
                                            self.num_workers)
     if not global_step_watcher:
       # In cross-replica sync mode, all workers must run the same number of
@@ -2294,9 +2575,15 @@ class BenchmarkCNN(object):
         log_fn('The TensorBoard debugger plugin will be used.')
         sess = tf_debug.TensorBoardDebugWrapperSession(sess,
                                                        self.params.debugger)
+    mlperf.logger.log(key=mlperf.tags.TRAIN_LOOP)
     skip_final_eval = False
+    accuracy_at_1 = None
+    accuracy_at_5 = None
+    last_eval_step = local_step
     loop_start_time = time.time()
     last_average_loss = None
+    # akoliousis: log start time
+    global_start_time = time.time()
     while not done_fn():
       if local_step == 0:
         log_fn('Done warm up')
@@ -2322,14 +2609,28 @@ class BenchmarkCNN(object):
         fetch_summary = None
       collective_graph_key = 7 if (
           self.params.variable_update == 'collective_all_reduce') else 0
+      #
+      # Alexandros Koliousis (25 March 2019)
+      #
       (summary_str, last_average_loss) = benchmark_one_step(
-          sess, graph_info.fetches, local_step,
-          self.batch_size * (self.num_workers
-                             if self.single_session else 1), step_train_times,
-          self.trace_filename, self.params.partitioned_graph_file_prefix,
-          profiler, image_producer, self.params, fetch_summary,
+          sess, 
+          graph_info.fetches, 
+          local_step,
+          self.batch_size * (self.num_workers if self.single_session else 1),
+          global_start_time,
+          step_train_times,
+          self.trace_filename, 
+          self.params.partitioned_graph_file_prefix,
+          profiler, 
+          image_producer, 
+          self.params, 
+          fetch_summary,
           benchmark_logger=self.benchmark_logger,
-          collective_graph_key=collective_graph_key)
+          collective_graph_key=collective_graph_key,
+          saver=supervisor.saver,
+          filepath=self.filepath,
+          checkpoint_interval=self.checkpoint_interval)
+
       if summary_str is not None and is_chief:
         supervisor.summary_computed(sess, summary_str)
       local_step += 1
@@ -2342,12 +2643,21 @@ class BenchmarkCNN(object):
       if (eval_graph_info and local_step > 0 and not done_fn() and
           self._should_eval_during_training(local_step)):
         python_global_step = sess.run(graph_info.global_step)
+        num_steps_since_last_eval = local_step - last_eval_step
+        # The INPUT_SIZE tag value might not match the
+        # PREPROC_NUM_TRAIN_EXAMPLES tag value, because the number of examples
+        # run, which is INPUT_SIZE, is rounded up to the nearest multiple of
+        # self.batch_size.
+        mlperf.logger.log(
+            key=mlperf.tags.INPUT_SIZE,
+            value=num_steps_since_last_eval * self.batch_size)
         log_fn('Running evaluation at global_step {}'.format(
             python_global_step))
-        accuracy_at_1, _ = self._eval_once(
+        accuracy_at_1, accuracy_at_5 = self._eval_once(
             sess, summary_writer, eval_graph_info.fetches,
             eval_graph_info.summary_op, eval_image_producer,
             python_global_step)
+        last_eval_step = local_step
         if (self.params.stop_at_top_1_accuracy and
             accuracy_at_1 >= self.params.stop_at_top_1_accuracy):
           log_fn('Stopping, as eval accuracy at least %s was reached' %
@@ -2356,6 +2666,10 @@ class BenchmarkCNN(object):
           break
         else:
           log_fn('Resuming training')
+      if eval_graph_info and self.model.reached_target():
+        log_fn('Stopping, as the model indicates its custom goal was reached')
+        skip_final_eval = True
+        break
     loop_end_time = time.time()
     # Waits for the global step to be done, regardless of done_fn.
     if global_step_watcher:
@@ -2379,20 +2693,38 @@ class BenchmarkCNN(object):
     # We skip printing images/sec if --eval_during_training_* is specified,
     # because we are both processing training and evaluation images, so a
     # singular "images/sec" value is meaningless.
-    if not self.params.eval_during_training_every_n_steps:
+    if self.mode != constants.BenchmarkMode.TRAIN_AND_EVAL:
       log_fn('-' * 64)
       # TODO(laigd): rename 'images' to maybe 'inputs'.
       log_fn('total images/sec: %.2f' % images_per_sec)
       log_fn('-' * 64)
     else:
       log_fn('Done with training')
+
+    # Alexandros Koliousis (26 March 2019)
+    #
+    # Checkpoint one lsat time?
+    #
+    if not (supervisor.saver and self.filepath):
+        raise ValueError("Undefined saver")
+    print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
+    sys.stdout.flush()
+    supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
+
+    num_steps_since_last_eval = local_step - last_eval_step
+    mlperf.logger.log(
+        key=mlperf.tags.INPUT_SIZE,
+        value=num_steps_since_last_eval * self.batch_size)
+    python_global_step = sess.run(graph_info.global_step)
     if eval_graph_info and not skip_final_eval:
-      python_global_step = sess.run(graph_info.global_step)
       log_fn('Running final evaluation at global_step {}'.format(
           python_global_step))
-      self._eval_once(sess, summary_writer, eval_graph_info.fetches,
-                      eval_graph_info.summary_op, eval_image_producer,
-                      python_global_step)
+      accuracy_at_1, accuracy_at_5 = self._eval_once(
+          sess, summary_writer, eval_graph_info.fetches,
+          eval_graph_info.summary_op, eval_image_producer, python_global_step)
+    num_epochs_ran = (python_global_step * self.batch_size /
+                      self.dataset.num_examples_per_epoch('train'))
+    mlperf.logger.log_train_epochs(num_epochs_ran)
     if image_producer is not None:
       image_producer.done()
     if eval_image_producer is not None:
@@ -2420,6 +2752,16 @@ class BenchmarkCNN(object):
     }
     if last_average_loss is not None:
       stats['last_average_loss'] = last_average_loss
+    if accuracy_at_1 is not None:
+      stats['top_1_accuracy'] = accuracy_at_1
+    if accuracy_at_5 is not None:
+      stats['top_5_accuracy'] = accuracy_at_5
+
+    success = bool(self.model.reached_target() or
+                   (accuracy_at_1 and self.params.stop_at_top_1_accuracy and
+                    accuracy_at_1 >= self.params.stop_at_top_1_accuracy))
+    mlperf.logger.log(key=mlperf.tags.RUN_STOP, value={'success': success})
+    mlperf.logger.log(key=mlperf.tags.RUN_FINAL)
     return stats
 
   def _should_eval_during_training(self, step):
@@ -2567,8 +2909,11 @@ class BenchmarkCNN(object):
     input_processing_info = InputProcessingInfo(
         input_producer_op=None,
         input_producer_stages=None,
-        function_buffering_resources=None,
         multi_device_iterator_input=None)
+
+    mlperf.logger.log(key=mlperf.tags.INPUT_ORDER)
+    if not self._doing_eval:
+      mlperf.logger.log(key=mlperf.tags.INPUT_BATCH_SIZE, value=self.batch_size)
 
     # If using synthetic gpu inputs, do nothing on the cpu side.
     if self.dataset.use_synthetic_gpu_inputs():
@@ -2577,28 +2922,21 @@ class BenchmarkCNN(object):
 
     if self._doing_eval:
       input_preprocessor = self.eval_input_preprocessor
+      mlperf.logger.log(key=mlperf.tags.PREPROC_NUM_EVAL_EXAMPLES,
+                        value=self.dataset.num_examples_per_epoch('validation'))
     else:
       input_preprocessor = self.input_preprocessor
+      mlperf.logger.log(key=mlperf.tags.PREPROC_NUM_TRAIN_EXAMPLES,
+                        value=self.dataset.num_examples_per_epoch('train'))
 
     # Use prefetching mechanism provided by dataset input pipeline.
     if self.datasets_use_prefetch:
-      if self.params.use_multi_device_iterator:
-        multi_device_iterator = (
-            input_preprocessor.build_multi_device_iterator(
-                self.batch_size, len(self.devices), self.cpu_device,
-                self.params, self.raw_devices, self.dataset, self._doing_eval))
-        return input_processing_info._replace(
-            multi_device_iterator_input=multi_device_iterator.get_next())
-
-      subset = 'validation' if self._doing_eval else 'train'
-      function_buffering_resources = (
-          input_preprocessor.build_prefetch_input_processing(
-              self.batch_size, self.model.get_input_shapes(subset),
-              len(self.devices), self.cpu_device, self.params, self.devices,
-              self.model.get_input_data_types(subset), self.dataset,
-              self._doing_eval))
+      multi_device_iterator = (
+          input_preprocessor.build_multi_device_iterator(
+              self.batch_size, len(self.devices), self.cpu_device, self.params,
+              self.raw_devices, self.dataset, self._doing_eval))
       return input_processing_info._replace(
-          function_buffering_resources=function_buffering_resources)
+          multi_device_iterator_input=multi_device_iterator.get_next())
 
     # Not using dataset prefetching. Use a staging area to mimic the prefetching
     # behavior instead.
@@ -2665,7 +3003,11 @@ class BenchmarkCNN(object):
       seed_adjustment = int(os.getenv('KUNGFU_SELF_RANK'))
     else:
       seed_adjustment = 0
+    mlperf.logger.log(key=mlperf.tags.RUN_SET_RANDOM_SEED,
+                      value=self.params.tf_random_seed + seed_adjustment)
     tf.set_random_seed(self.params.tf_random_seed + seed_adjustment)
+    mlperf.logger.log(key=mlperf.tags.RUN_SET_RANDOM_SEED,
+                      value=4321 + seed_adjustment)
     np.random.seed(4321 + seed_adjustment)
     phase_train = not (self._doing_eval or self.params.forward_only)
 
@@ -2757,6 +3099,8 @@ class BenchmarkCNN(object):
       # TODO(reedwm): Have each tower read from the first tower's moving
       # averages for a slight performance gain.
       update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+      mlperf.logger.log(key=mlperf.tags.INPUT_BN_SPAN,
+                        value=self.batch_size // len(self.raw_devices))
 
     fetches = self._build_fetches(global_step, all_logits, losses, device_grads,
                                   enqueue_ops, update_ops, all_accuracy_ops,
@@ -2773,7 +3117,8 @@ class BenchmarkCNN(object):
       # For fetches that starts with 'tensor:', keep dimension and skip reducing
       # them to scalars.
       if name.startswith(constants.UNREDUCED_ACCURACY_OP_PREFIX):
-        fetches[name[len(constants.UNREDUCED_ACCURACY_OP_PREFIX):]] = ops[0]
+        key = name[len(constants.UNREDUCED_ACCURACY_OP_PREFIX):]
+        fetches[key] = tf.concat(ops, 0)
       else:
         fetches[name] = tf.reduce_sum(ops) / self.batch_size
         if self.task_index == 0 and self.params.summary_verbosity >= 1:
@@ -2926,7 +3271,7 @@ class BenchmarkCNN(object):
       # Build the per-worker image processing
       with tf.name_scope('input_processing'):
         input_processing_info = self._build_input_processing(
-            shift_ratio=(float(task_num) / self.num_workers))
+            shift_ratio=(task_num / self.num_workers))
       if input_processing_info.input_producer_op is not None:
         global_input_producer_op.extend(input_processing_info.input_producer_op)
       # Build the per-worker model replica.
@@ -2998,31 +3343,11 @@ class BenchmarkCNN(object):
     """Add ops for forward-pass and gradient computations."""
     nclass = self.dataset.num_classes
     if self.datasets_use_prefetch:
-      function_buffering_resource = None
-      if input_processing_info.function_buffering_resources:
-        function_buffering_resource = (
-            input_processing_info.function_buffering_resources[rel_device_num])
-
-      input_data = None
-      if input_processing_info.multi_device_iterator_input:
-        input_data = (
-            input_processing_info.multi_device_iterator_input[rel_device_num])
-
-      # Exactly one of function_buffering_resource or input_data is not None.
-      if function_buffering_resource is None and input_data is None:
-        raise ValueError('Both function_buffering_resource and input_data '
-                         'cannot be null if datasets_use_prefetch=True')
-      if function_buffering_resource is not None and input_data is not None:
-        raise ValueError('Both function_buffering_resource and input_data '
-                         'cannot be specified. Only one should be.')
-      with tf.device(self.raw_devices[rel_device_num]):
-        if function_buffering_resource is not None:
-          subset = 'validation' if self._doing_eval else 'train'
-          input_list = prefetching_ops.function_buffering_resource_get_next(
-              function_buffering_resource,
-              output_types=self.model.get_input_data_types(subset))
-        else:
-          input_list = input_data
+      assert input_processing_info.multi_device_iterator_input, (
+          'multi_device_iterator_input cannot be None if '
+          'datasets_use_prefetch=True')
+      input_list = (
+          input_processing_info.multi_device_iterator_input[rel_device_num])
     else:
       if not self.dataset.use_synthetic_gpu_inputs():
         input_producer_stage = input_processing_info.input_producer_stages[
@@ -3108,6 +3433,7 @@ class BenchmarkCNN(object):
           # TODO(b/36217816): Once the bug is fixed, investigate if we should do
           # this reduction in fp16.
           fp32_params = (tf.cast(p, tf.float32) for p in params)
+        filtered_params = self.model.filter_l2_loss_vars(fp32_params)
         if rel_device_num == len(self.devices) - 1:
           # We compute the L2 loss for only one device instead of all of them,
           # because the L2 loss for each device is the same. To adjust for this,
@@ -3115,20 +3441,20 @@ class BenchmarkCNN(object):
           # last device because for some reason, on a Volta DGX1, the first four
           # GPUs take slightly longer to complete a step than the last four.
           # TODO(reedwm): Shard the L2 loss computations across GPUs.
-          custom_l2_loss = self.model.custom_l2_loss(fp32_params)
-          if custom_l2_loss is not None:
-            l2_loss = custom_l2_loss
-          elif self.params.single_l2_loss_op:
+          if self.params.single_l2_loss_op:
             # TODO(reedwm): If faster, create a fused op that does the L2 loss
             # on multiple tensors, and use that instead of concatenating
             # tensors.
-            reshaped_params = [tf.reshape(p, (-1,)) for p in fp32_params]
+            reshaped_params = [tf.reshape(p, (-1,)) for p in filtered_params]
             l2_loss = tf.nn.l2_loss(tf.concat(reshaped_params, axis=0))
           else:
-            l2_loss = tf.add_n([tf.nn.l2_loss(v) for v in fp32_params])
+            l2_loss = tf.add_n([tf.nn.l2_loss(v) for v in filtered_params])
       weight_decay = self.params.weight_decay
+      mlperf.logger.log(key=mlperf.tags.OPT_WEIGHT_DECAY, value=weight_decay)
       if (weight_decay is not None and weight_decay != 0. and
           l2_loss is not None):
+        mlperf.logger.log(key=mlperf.tags.MODEL_L2_REGULARIZATION,
+                          value=weight_decay)
         total_loss += len(self.devices) * weight_decay * l2_loss
 
       aggmeth = tf.AggregationMethod.DEFAULT
@@ -3261,7 +3587,7 @@ class BenchmarkCNN(object):
     if self.job_name:
       # shift_ratio prevents multiple workers from processing the same batch
       # during a step
-      shift_ratio = float(self.task_index) / self.num_workers
+      shift_ratio = self.task_index / self.num_workers
 
     processor_class = self.dataset.get_input_preprocessor(
         self.params.input_preprocessor)
@@ -3279,7 +3605,8 @@ class BenchmarkCNN(object):
         shift_ratio=shift_ratio,
         summary_verbosity=self.params.summary_verbosity,
         distort_color_in_yiq=self.params.distort_color_in_yiq,
-        fuse_decode_and_crop=self.params.fuse_decode_and_crop)
+        fuse_decode_and_crop=self.params.fuse_decode_and_crop,
+        match_mlperf=self.params.ml_perf)
 
   def add_sync_queues_and_barrier(self, name_prefix, enqueue_after_list):
     """Adds ops to enqueue on all worker queues.

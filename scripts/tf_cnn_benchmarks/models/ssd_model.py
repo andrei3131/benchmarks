@@ -31,11 +31,14 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import multiprocessing
 import os
 import re
+import threading
 import tensorflow as tf
 
 import constants
+import mlperf
 import ssd_constants
 from cnn_util import log_fn
 from models import model as model_lib
@@ -57,14 +60,19 @@ class SSD300Model(model_lib.CNNModel):
     # Currently only support ResNet-34 as backbone model
     if backbone != 'resnet34':
       raise ValueError('Invalid backbone model %s for SSD.' % backbone)
+    mlperf.logger.log(key=mlperf.tags.BACKBONE, value=backbone)
 
     # Number of channels and default boxes associated with the following layers:
     #   ResNet34 layer, Conv7, Conv8_2, Conv9_2, Conv10_2, Conv11_2
     self.out_chan = [256, 512, 512, 256, 256, 256]
+    mlperf.logger.log(key=mlperf.tags.LOC_CONF_OUT_CHANNELS,
+                      value=self.out_chan)
 
     # Number of default boxes from layers of different scales
     #   38x38x4, 19x19x6, 10x10x6, 5x5x6, 3x3x4, 1x1x4
     self.num_dboxes = [4, 6, 6, 6, 4, 4]
+    mlperf.logger.log(key=mlperf.tags.NUM_DEFAULTS_PER_CELL,
+                      value=self.num_dboxes)
 
     # TODO(haoyuzhang): in order to correctly restore in replicated mode, need
     # to create a saver for each tower before graph is finalized. Use variable
@@ -82,16 +90,51 @@ class SSD300Model(model_lib.CNNModel):
     # Global step when predictions are collected.
     self.eval_global_step = 0
 
+    # Average precision. In asynchronous eval mode, this is the latest AP we
+    # get so far and may not be the results at current eval step.
+    self.eval_coco_ap = 0
+
+    # Process, queues, and thread for asynchronous evaluation. When enabled,
+    # create a separte process (async_eval_process) that continously pull
+    # intermediate results from the predictions queue (a multiprocessing queue),
+    # process them, and push final results into results queue (another
+    # multiprocessing queue). The main thread is responsible to push message
+    # into predictions queue, and start a separate thread to continuously pull
+    # messages from results queue to update final results.
+    # Message in predictions queue should be a tuple of two elements:
+    #    (evaluation step, predictions)
+    # Message in results queue should be a tuple of two elements:
+    #    (evaluation step, final results)
+    self.async_eval_process = None
+    self.async_eval_predictions_queue = None
+    self.async_eval_results_queue = None
+    self.async_eval_results_getter_thread = None
+
     # The MLPerf reference uses a starting lr of 1e-3 at bs=32.
     self.base_lr_batch_size = 32
 
   def skip_final_affine_layer(self):
     return True
 
-  def custom_l2_loss(self, fp32_params):
-    # TODO(haoyuzhang): check compliance with MLPerf rules
-    return tf.add_n([tf.nn.l2_loss(v) for v in fp32_params
-                     if 'batchnorm' not in v.name])
+  def gpu_preprocess_nhwc(self, images, phase_train=True):
+    try:
+      import ssd_dataloader  # pylint: disable=g-import-not-at-top
+    except ImportError:
+      raise ImportError('To use the COCO dataset, you must clone the '
+                        'repo https://github.com/tensorflow/models and add '
+                        'tensorflow/models and tensorflow/models/research to '
+                        'the PYTHONPATH, and compile the protobufs by '
+                        'following https://github.com/tensorflow/models/blob/'
+                        'master/research/object_detection/g3doc/installation.md'
+                        '#protobuf-compilation ; To evaluate using COCO'
+                        'metric, download and install Python COCO API from'
+                        'https://github.com/cocodataset/cocoapi')
+
+    if phase_train:
+      images = ssd_dataloader.color_jitter(
+          images, brightness=0.125, contrast=0.5, saturation=0.5, hue=0.05)
+      images = ssd_dataloader.normalize_image(images)
+    return images
 
   def add_backbone_model(self, cnn):
     # --------------------------------------------------------------------------
@@ -129,8 +172,8 @@ class SSD300Model(model_lib.CNNModel):
       resnet_model.residual_block(cnn, 256, stride, version, i == 0)
 
     # ResNet-34 block group 4: removed final block group
-    # The following 3 lines are intentially commented out to differentiate from
-    # the original ResNet-34 model
+    # The following 3 lines are intentionally commented out to differentiate
+    # from the original ResNet-34 model
     # for i in range(resnet34_layers[3]):
     #   stride = 2 if i == 0 else 1
     #   resnet_model.residual_block(cnn, 512, stride, version, i == 0)
@@ -511,8 +554,8 @@ class SSD300Model(model_lib.CNNModel):
       self.eval_global_step = results['global_step']
       self.predictions.clear()
 
-    for i in range(self.get_batch_size()):
-      self.predictions[int(source_id[i])] = {
+    for i, sid in enumerate(source_id):
+      self.predictions[int(sid)] = {
           ssd_constants.PRED_BOXES: pred_boxes[i],
           ssd_constants.PRED_SCORES: pred_scores[i],
           ssd_constants.SOURCE_ID: source_id[i],
@@ -524,19 +567,75 @@ class SSD300Model(model_lib.CNNModel):
     if len(self.predictions) >= ssd_constants.COCO_NUM_VAL_IMAGES:
       log_fn('Got results for all {:d} eval examples. Calculate mAP...'.format(
           ssd_constants.COCO_NUM_VAL_IMAGES))
+
       annotation_file = os.path.join(self.params.data_dir,
                                      ssd_constants.ANNOTATION_FILE)
-      eval_results = coco_metric.compute_map(self.predictions.values(),
-                                             annotation_file)
+      # Size of predictions before decoding about 15--30GB, while size after
+      # decoding is 100--200MB. When using async eval mode, decoding takes
+      # 20--30 seconds of main thread time but is necessary to avoid OOM during
+      # inter-process communication.
+      decoded_preds = coco_metric.decode_predictions(self.predictions.values())
       self.predictions.clear()
-      ret = {'top_1_accuracy': 0., 'top_5_accuracy': 0.}
+
+      if self.params.collect_eval_results_async:
+        def _eval_results_getter():
+          """Iteratively get eval results from async eval process."""
+          while True:
+            step, eval_results = self.async_eval_results_queue.get()
+            self.eval_coco_ap = eval_results['COCO/AP']
+            mlperf.logger.log_eval_accuracy(
+                self.eval_coco_ap, step, self.batch_size * self.params.num_gpus,
+                ssd_constants.COCO_NUM_TRAIN_IMAGES)
+            if self.reached_target():
+              # Reached target, clear all pending messages in predictions queue
+              # and insert poison pill to stop the async eval process.
+              while not self.async_eval_predictions_queue.empty():
+                self.async_eval_predictions_queue.get()
+              self.async_eval_predictions_queue.put('STOP')
+              break
+
+        if not self.async_eval_process:
+          # Limiting the number of messages in predictions queue to prevent OOM.
+          # Each message (predictions data) can potentially consume a lot of
+          # memory, and normally there should only be few messages in the queue.
+          # If often blocked on this, consider reducing eval frequency.
+          self.async_eval_predictions_queue = multiprocessing.Queue(2)
+          self.async_eval_results_queue = multiprocessing.Queue()
+
+          # Reason to use a Process as opposed to Thread is mainly the
+          # computationally intensive eval runner. Python multithreading is not
+          # truly running in parallel, a runner thread would get significantly
+          # delayed (or alternatively delay the main thread).
+          self.async_eval_process = multiprocessing.Process(
+              target=coco_metric.async_eval_runner,
+              args=(self.async_eval_predictions_queue,
+                    self.async_eval_results_queue,
+                    annotation_file))
+          self.async_eval_process.daemon = True
+          self.async_eval_process.start()
+
+          self.async_eval_results_getter_thread = threading.Thread(
+              target=_eval_results_getter, args=())
+          self.async_eval_results_getter_thread.daemon = True
+          self.async_eval_results_getter_thread.start()
+
+        self.async_eval_predictions_queue.put(
+            (self.eval_global_step, decoded_preds))
+        return {'top_1_accuracy': 0, 'top_5_accuracy': 0.}
+
+      eval_results = coco_metric.compute_map(decoded_preds, annotation_file)
+      self.eval_coco_ap = eval_results['COCO/AP']
+      ret = {'top_1_accuracy': self.eval_coco_ap, 'top_5_accuracy': 0.}
       for metric_key, metric_value in eval_results.items():
         ret[constants.SIMPLE_VALUE_RESULT_PREFIX + metric_key] = metric_value
+      mlperf.logger.log_eval_accuracy(self.eval_coco_ap, self.eval_global_step,
+                                      self.batch_size * self.params.num_gpus,
+                                      ssd_constants.COCO_NUM_TRAIN_IMAGES)
       return ret
     log_fn('Got {:d} out of {:d} eval examples.'
            ' Waiting for the remaining to calculate mAP...'.format(
                len(self.predictions), ssd_constants.COCO_NUM_VAL_IMAGES))
-    return {'top_1_accuracy': 0., 'top_5_accuracy': 0.}
+    return {'top_1_accuracy': self.eval_coco_ap, 'top_5_accuracy': 0.}
 
   def get_synthetic_inputs(self, input_name, nclass):
     """Generating synthetic data matching real data shape and type."""
@@ -550,3 +649,7 @@ class SSD300Model(model_lib.CNNModel):
     nboxes = tf.random_uniform(
         [self.batch_size], minval=1, maxval=10, dtype=tf.float32)
     return (inputs, boxes, classes, nboxes)
+
+  def reached_target(self):
+    return (self.params.stop_at_top_1_accuracy and
+            self.eval_coco_ap >= self.params.stop_at_top_1_accuracy)

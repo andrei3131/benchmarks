@@ -15,6 +15,10 @@
 
 """Utility code for the default platform."""
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import os
 import sys
 import tempfile
@@ -59,6 +63,14 @@ def get_test_output_dir():
 def get_test_data_dir():
   """Returns the path to the test_data directory."""
   return os.path.join(_ROOT_PROJECT_DIR, 'test_data')
+
+
+def get_ssd_backborn_model_file():
+  raise NotImplementedError
+
+
+def get_ssd_backboard_data_dir():
+  raise NotImplementedError
 
 
 def _initialize(params, config_proto):
