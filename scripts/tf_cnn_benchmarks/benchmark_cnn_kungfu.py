@@ -1015,16 +1015,9 @@ def benchmark_one_step(sess,
             LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
             LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
         log_fn(log_str)
-      #  Save the model checkpoint periodically
-      if params.variable_update == 'kungfu':
-         if int(os.getenv('KUNGFU_SELF_RANK')) == 0:
-            if not (saver and filepath):   
-               raise ValueError("Undefined saver & filepath")
-         else:
-            return (summary_str, lossval)
-      else:   
-         if not (saver and filepath):
-            raise ValueError("Undefined saver & filepath")
+      # All workers save the model checkpoints
+      if not (saver and filepath):
+         raise ValueError("Undefined saver & filepath")
       
       print("DBG> Checkpoint at step", (step + 1))
       sys.stdout.flush()
@@ -1408,9 +1401,17 @@ class BenchmarkCNN(object):
     # Alexandros Koliousis (25 March 2019)
     #
     # Create checkpoint directory
-    if not self.params.eval:
-        self.filepath, self.version = _checkpoint_path(params.checkpoint_directory,
-                params.checkpoint_version)
+    if not self.params.eval:  
+        import os
+        if os.getenv('KUNGFU_SELF_RANK') is None:
+           self.filepath, self.version = _checkpoint_path(params.checkpoint_directory, 
+                                                          params.checkpoint_version)
+        else:
+            self.filepath, self.version = _checkpoint_path(params.checkpoint_directory + 
+                                                          '-worker-' + 
+                                                          str(int(os.getenv('KUNGFU_SELF_RANK'))),
+                                                          params.checkpoint_version)
+
         print("DBG>", "%s (v. %d)" % (self.filepath, self.version))
 
     self.trace_filename = self.params.trace_file
@@ -2220,8 +2221,8 @@ class BenchmarkCNN(object):
                             simple_value=result_value)
       if summary_writer:
         summary_writer.add_summary(summary, global_step)
-      log_fn('Accuracy @ 1 = %.4f Accuracy @ 5 = %.4f [%d examples]' %
-             (accuracy_at_1, accuracy_at_5, total_eval_count))
+      log_fn('[Global Step %d] Accuracy @ 1 = %.4f Accuracy @ 5 = %.4f [%d examples]' %
+             (global_step, accuracy_at_1, accuracy_at_5, total_eval_count))
       # Flush
       sys.stdout.flush()
       elapsed_time = loop_end_time - loop_start_time
@@ -2405,8 +2406,13 @@ class BenchmarkCNN(object):
           self.variable_mgr.savable_variables(),
           save_relative_paths=True,
           max_to_keep=self.params.max_ckpts_to_keep)
-    else:
-      saver = None
+    
+    if self.params.variable_update == 'kungfu' and not is_chief:
+       saver = tf.train.Saver(
+          self.variable_mgr.savable_variables(),
+          save_relative_paths=True,
+          max_to_keep=self.params.max_ckpts_to_keep)
+                
     ready_for_local_init_op = None
     if self.job_name and not (self.single_session or
                               self.distributed_collective):
@@ -2714,14 +2720,13 @@ class BenchmarkCNN(object):
     #
     # Checkpoint one last time?
     #
-    if is_chief:
-       if not (supervisor.saver and self.filepath):
-            raise ValueError("Undefined saver")
-       print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
-       sys.stdout.flush()
-       supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
+    # All workers checkpoint
+    if not (supervisor.saver and self.filepath):
+        raise ValueError("Undefined saver")
+    print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
+    sys.stdout.flush()
+    supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
     
-
     num_steps_since_last_eval = local_step - last_eval_step
     mlperf.logger.log(
         key=mlperf.tags.INPUT_SIZE,
