@@ -170,8 +170,11 @@ flags.DEFINE_integer('batch_size', 0, 'batch size per compute device')
 # Andrei-Octavian Brabete
 # Synchronization Strategy Flags
 flags.DEFINE_integer('ako_partitions', 1, 'number of Ako partitions')
+flags.DEFINE_float('partial_exchange_fraction', 0.3, 'Fraction of gradients to exchange')
 flags.DEFINE_string('kungfu_strategy', 'parallel',
-		                'Name of KungFu strategy: parallel or ako. If not specified, default is ako')        
+		                'Name of KungFu strategy: parallel, ako, partial_exchange, partial_exchange_accumulation, \
+                    partial_exchange_accumulation_avg_peers, partial_exchange_accumulation_avg_window. \
+                    If not specified, default is parallel')        
 
 flags.DEFINE_integer('eval_batch_size', 0, 'eval batch size per compute device')
 flags.DEFINE_integer('batch_group_size', 1,
@@ -3505,7 +3508,19 @@ class BenchmarkCNN(object):
                 for grad in grads]
 
       if self.params.variable_update == 'kungfu':
-        if self.params.kungfu_strategy == "ako":
+        if self.params.kungfu_strategy == "partial_exchange":
+          from kungfu.ops import partial_exchange_group_all_reduce
+          grads = partial_exchange_group_all_reduce(grads, fraction=self.params.partial_exchange_fraction, accumulate=False)
+        elif self.params.kungfu_strategy == "partial_exchange_accumulation":
+          from kungfu.ops import partial_exchange_group_all_reduce
+          grads = partial_exchange_group_all_reduce(grads, fraction=self.params.partial_exchange_fraction, accumulate=True)
+        elif self.params.kungfu_strategy == "partial_exchange_accumulation_avg_peers":
+          from kungfu.ops import partial_exchange_group_all_reduce
+          grads = partial_exchange_group_all_reduce(grads, fraction=self.params.partial_exchange_fraction, accumulate=True, average="peers")     
+        elif self.params.kungfu_strategy == "partial_exchange_accumulation_avg_window":
+          from kungfu.ops import partial_exchange_group_all_reduce
+          grads = partial_exchange_group_all_reduce(grads, fraction=self.params.partial_exchange_fraction, accumulate=True, average="window")  
+        elif self.params.kungfu_strategy == "ako":
           from kungfu.ops import ako_group_all_reduce
           grads = ako_group_all_reduce(grads, num_partitions=self.params.ako_partitions)
         elif self.params.kungfu_strategy == "cpu_all_reduce":
@@ -3515,6 +3530,7 @@ class BenchmarkCNN(object):
           from kungfu.ops import gpu_group_all_reduce
           grads = gpu_group_all_reduce(grads)
         else:
+          print(self.params.kungfu_strategy)
           raise Exception('Unknown kungfu strategy.')
 
       if self.params.staged_vars:
