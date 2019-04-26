@@ -1,6 +1,0 @@
-# FROM swr.cn-north-1.myhuaweicloud.com/mailuo/tensorflow-benchmark:v.5 as base
-FROM swr.cn-north-1.myhuaweicloud.com/mailuo/mox-cuda9-base:v1 as base
-
-ADD . /benchmarks
-
-WORKDIR /
