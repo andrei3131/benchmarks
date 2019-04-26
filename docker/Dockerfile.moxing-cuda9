@@ -1,9 +1,8 @@
-# CrossBow Docker image based on Huawei ModelArts CUDA 9
-# ModelArts example: https://github.com/huawei-clouds/modelarts-example/blob/master/CustomImage
 FROM swr.cn-north-1.myhuaweicloud.com/eiwizard/custom-gpu-cuda9-inner-moxing-cp36:1.1 as base
 
 # Fix the source lists
-RUN sed -i 's/cmc-cd-mirror.rnd.huawei.com/security.ubuntu.com/g' /etc/apt/sources.list
+ARG SOURCES_LIST=docker/sources.list.aliyun
+ADD ${SOURCES_LIST} /etc/apt/sources.list
 
 # The pip source has been pre-configured to an internal source. Roll back to public sources.
 RUN rm $HOME/.pip/pip.conf
@@ -17,8 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/7fa2af80.pub && \
     apt-key adv --export --no-emit-version -a $NVIDIA_GPGKEY_FPR | tail -n +5 > cudasign.pub && \
     echo "$NVIDIA_GPGKEY_SUM  cudasign.pub" | sha256sum -c --strict - && rm cudasign.pub && \
-    echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64 /" > /etc/apt/sources.list.d/cuda.list && \
-    echo "deb https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1604/x86_64 /" > /etc/apt/sources.list.d/nvidia-ml.list
+    echo "deb http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64 /" > /etc/apt/sources.list.d/cuda.list && \
+    echo "deb http://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1604/x86_64 /" > /etc/apt/sources.list.d/nvidia-ml.list
 
 # Install the GPU support for TensorFlow 1.12 (CUDA 9)
 # Reference: https://www.tensorflow.org/install/gpu
@@ -31,15 +30,17 @@ RUN apt update && apt install -y --no-install-recommends \
         cuda-cusolver-9-0 \
         cuda-cusparse-9-0 \
         libcudnn7=7.2.1.38-1+cuda9.0 \
-        libnccl2=2.2.13-1+cuda9.0 \
+        libnccl2=2.4.2-1+cuda9.0 \
+        libnccl-dev=2.4.2-1+cuda9.0 \
         cuda-command-line-tools-9-0 \
-        && rm -rf /var/lib/apt/lists/*
+        cmake
+        # && rm -rf /var/lib/apt/lists/*
 
 # Install tensorflow-gpu 1.12.0 in the conda environment (pip has been redirected to conda pip)
-# RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple tensorflow-gpu==1.12.0 # Run this if in the mainland China
-RUN pip install tensorflow-gpu==1.12.0
+RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple tensorflow-gpu==1.12.0
+# RUN pip install tensorflow-gpu==1.12.0
 
-# Add the benchmark project
-ADD . /benchmarks
+RUN wget -q https://dl.google.com/go/go1.11.linux-amd64.tar.gz && tar -C /usr/local -xf go1.11.linux-amd64.tar.gz && rm go1.11.linux-amd64.tar.gz
+ENV PATH=$PATH:/usr/local/go/bin
 
-WORKDIR /benchmarks/scripts/tf_cnn_benchmarks/
+WORKDIR /

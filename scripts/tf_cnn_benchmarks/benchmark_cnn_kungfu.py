@@ -1025,6 +1025,7 @@ def benchmark_one_step(sess,
       print("DBG> Checkpoint at step", (step + 1))
       sys.stdout.flush()
       saver.save(sess, filepath, global_step=(step + 1), write_state=False)
+      print("DBG> Write checkpoint to the filepath", filepath)
 
   return (summary_str, lossval)
 

@@ -24,7 +24,7 @@ from absl import app
 from absl import flags as absl_flags
 import tensorflow as tf
 
-import benchmark_cnn
+import benchmark_cnn_kungfu
 import cnn_util
 import flags
 from cnn_util import log_fn
@@ -55,33 +55,35 @@ def main(positional_arguments):
   print('INFO: data_url: ' + data_url)
   train_url = os.environ['DLS_TRAIN_URL']
   print('INFO: train_url: ' + train_url)
-  task_index = int(os.environ['DLS_TASK_INDEX'])
-  print('INFO: task_index: ' + str(task_index))
-  n_tasks = int(os.environ['DLS_TASK_NUMBER'])
-  print('INFO: n_tasks: ' + str(n_tasks))
-  for i in range(0, n_tasks):
-    host = os.environ['BATCH_CUSTOM' + str(i) +'_HOSTS']
-    if i == 0:
-      hosts = host
-    else:
-      hosts = hosts + ',' + host
-  print('INFO: hosts: ' + hosts)
-
-  absl_flags.FLAGS.worker_hosts = hosts
-  absl_flags.FLAGS.task_index = task_index
   absl_flags.FLAGS.data_dir = '/cache/data_dir'
   absl_flags.FLAGS.train_dir = '/cache/train_dir'
-  # END
+  absl_flags.FLAGS.checkpoint_directory = absl_flags.FLAGS.train_dir
+
+  n_tasks = int(os.environ['DLS_TASK_NUMBER'])
+  print('INFO: n_tasks: ' + str(n_tasks))
+  if n_tasks > 1:
+    task_index = int(os.environ['DLS_TASK_INDEX'])
+    print('INFO: task_index: ' + str(task_index))
+    for i in range(0, n_tasks):
+      host = os.environ['BATCH_CUSTOM' + str(i) +'_HOSTS']
+      if i == 0:
+        hosts = host
+      else:
+        hosts = hosts + ',' + host
+    print('INFO: hosts: ' + hosts)
+
+    absl_flags.FLAGS.worker_hosts = hosts
+    absl_flags.FLAGS.task_index = task_index
   
-  params = benchmark_cnn.make_params_from_flags()
+  params = benchmark_cnn_kungfu.make_params_from_flags()
 
   print('INFO: Start copying data from the blob storage into local SSD')
   start = time.time()
   mox.file.copy_parallel(data_url, params.data_dir)
   print('INFO: Complete copy! The copy task takes: ' + str(time.time() - start) + ' seconds')
 
-  params = benchmark_cnn.setup(params)
-  bench = benchmark_cnn.BenchmarkCNN(params)
+  params = benchmark_cnn_kungfu.setup(params)
+  bench = benchmark_cnn_kungfu.BenchmarkCNN(params)
 
   tfversion = cnn_util.tensorflow_version_tuple()
   log_fn('TensorFlow:  %i.%i' % (tfversion[0], tfversion[1]))
@@ -90,7 +92,11 @@ def main(positional_arguments):
   bench.run()
 
   print('INFO: Copy checkpoints to ' + train_url)
-  mox.file.copy_parallel(params.train_dir, train_url)
+  mox.file.copy_parallel(absl_flags.FLAGS.checkpoint_directory, train_url)
+
+  print('INFO: List checkpoints directory ')
+  for file_name in os.listdir(absl_flags.FLAGS.checkpoint_directory):
+    print(file_name)
 
 
 if __name__ == '__main__':
