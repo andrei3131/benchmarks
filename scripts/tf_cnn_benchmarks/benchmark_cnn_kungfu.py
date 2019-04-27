@@ -1407,13 +1407,13 @@ class BenchmarkCNN(object):
     # Create checkpoint directory
     if not self.params.eval:  
         import os
-        if os.getenv('KUNGFU_SELF_RANK') is None:
+        if os.getenv('KUNGFU_TEST_SELF_RANK') is None:
            self.filepath, self.version = _checkpoint_path(params.checkpoint_directory, 
                                                           params.checkpoint_version)
         else:
             self.filepath, self.version = _checkpoint_path(params.checkpoint_directory + 
                                                           '-worker-' + 
-                                                          str(int(os.getenv('KUNGFU_SELF_RANK'))),
+                                                          str(int(os.getenv('KUNGFU_TEST_SELF_RANK'))),
                                                           params.checkpoint_version)
 
         print("DBG>", "%s (v. %d)" % (self.filepath, self.version))
@@ -2378,7 +2378,7 @@ class BenchmarkCNN(object):
       # save checkpoints.
       is_chief = hvd.rank() == 0
     if self.params.variable_update == 'kungfu':
-      is_chief = int(os.getenv('KUNGFU_SELF_RANK')) == 0 
+      is_chief = int(os.getenv('KUNGFU_TEST_SELF_RANK')) == 0 
     else:
       is_chief = (not self.job_name or self.task_index == 0)
 
@@ -3020,7 +3020,7 @@ class BenchmarkCNN(object):
       seed_adjustment = hvd.rank()
     elif self.params.variable_update == 'kungfu':
       import os
-      seed_adjustment = int(os.getenv('KUNGFU_SELF_RANK'))
+      seed_adjustment = int(os.getenv('KUNGFU_TEST_SELF_RANK'))
     else:
       seed_adjustment = 0
     mlperf.logger.log(key=mlperf.tags.RUN_SET_RANDOM_SEED,

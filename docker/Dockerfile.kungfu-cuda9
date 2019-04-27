@@ -1,6 +1,6 @@
 # https://github.com/horovod/horovod/blob/master/Dockerfile
 
-FROM nvidia/cuda:9.0-base-ubuntu16.04 
+FROM nvidia/cuda:9.0-base-ubuntu16.04
 
 RUN apt-get update && \
         apt-get install -y --allow-downgrades --allow-change-held-packages --no-install-recommends \
