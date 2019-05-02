@@ -2,15 +2,16 @@
 
 set -x
 
-cd /home/work/user-job-dir/code/KungFu/
+cd /home/work/user-job-dir/tf_cnn_benchmarks/
 
-./configure --build-tensorflow-ops
-ldconfig /usr/local/cuda-9.0/targets/x86_64-linux/lib/stubs/
-env KUNGFU_USE_NCCL=0 pip install --no-index --user -U . 
-ldconfig
-./scripts/go-install.sh
-
-cd /home/work/user-job-dir/code/benchmarks/scripts/tf_cnn_benchmarks
+# Use this when placing code in andrei/code
+# cd /home/work/user-job-dir/code/kungfu/
+# ./configure --build-tensorflow-ops
+# ldconfig /usr/local/cuda-9.0/targets/x86_64-linux/lib/stubs/
+# env KUNGFU_USE_NCCL=0 pip install --no-index -U . 
+# ldconfig
+# ./scripts/go-install.sh
+# cd /home/work/user-job-dir/code/benchmarks/scripts/tf_cnn_benchmarks
 
 python moxing/prepare_input.py
 
@@ -59,7 +60,7 @@ python moxing/prepare_input.py
 
 
 echo "[BEGIN TRAINING KEY] training-parallel-sgd\n"
-kungfu-prun -np 4 -H 127.0.0.1:4 -timeout 1000000s # -np 16 -H 169.254.128.207:8,169.254.128.185:8 -nic ib0 -timeout 1000000s \
+kungfu-prun -np 16 -H 169.254.128.207:8,169.254.128.185:8 -nic ib0 -timeout 1000000s \
     python tf_cnn_benchmarks.py --model=resnet50 --data_name=imagenet --data_dir=/cache/data_dir --train_dir=/cache/train_dir \
     --num_batches=1000 --eval=False --forward_only=False --print_training_accuracy=True --tf_random_seed=123456789 \
     --num_gpus=1 --gpu_thread_mode=gpu_private --num_warmup_batches=20 --batch_size=150 \
