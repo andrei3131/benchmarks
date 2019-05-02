@@ -2,7 +2,7 @@
 
 set -x
 
-cd /home/work/user-job-dir/obs-code-mirror/KungFu/
+cd /home/work/user-job-dir/code/KungFu/
 
 ./configure --build-tensorflow-ops
 ldconfig /usr/local/cuda-9.0/targets/x86_64-linux/lib/stubs/
@@ -10,7 +10,7 @@ env KUNGFU_USE_NCCL=0 pip install --no-index --user -U .
 ldconfig
 ./scripts/go-install.sh
 
-cd /home/work/user-job-dir/obs-code-mirror/benchmarks/scripts/tf_cnn_benchmarks
+cd /home/work/user-job-dir/code/benchmarks/scripts/tf_cnn_benchmarks
 
 python moxing/prepare_input.py
 
