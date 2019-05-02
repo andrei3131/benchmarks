@@ -9,7 +9,7 @@ mkdir /cache/checkpoints/
 python moxing/prepare_input.py
 
 # Train model using Ako
-kungfu-prun -np $1 -H $2 -timeout 1000000s \
+kungfu-prun -np 8 -H 127.0.0.1:8 -timeout 1000000s \
     python tf_cnn_benchmarks.py --model=resnet50 --data_name=imagenet --data_dir=/cache/data_dir --train_dir=/cache/train_dir \
     --num_batches=200 --eval=False --forward_only=False --print_training_accuracy=True --tf_random_seed=123456789 \
     --num_gpus=1 --gpu_thread_mode=gpu_private --num_warmup_batches=20 --batch_size=150 \
