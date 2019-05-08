@@ -3512,6 +3512,9 @@ class BenchmarkCNN(object):
         if self.params.kungfu_strategy == "partial_exchange":
           from kungfu.ops import partial_exchange_group_all_reduce
           grads = partial_exchange_group_all_reduce(grads, fraction=self.params.partial_exchange_fraction, accumulate=False)
+        elif self.params.kungfu_strategy == "partial_exchange_frontend_partitioning":
+            from kungfu.ops import partial_exchange_group_all_reduce_front_end_partitioning
+            grads = partial_exchange_group_all_reduce_front_end_partitioning(grads, fraction=self.params.partial_exchange_fraction, accumulate=False)
         elif self.params.kungfu_strategy == "partial_exchange_accumulation":
           from kungfu.ops import partial_exchange_group_all_reduce
           grads = partial_exchange_group_all_reduce(grads, fraction=self.params.partial_exchange_fraction, accumulate=True)
@@ -3527,6 +3530,9 @@ class BenchmarkCNN(object):
         elif self.params.kungfu_strategy == "cpu_all_reduce":
           from kungfu.ops import cpu_group_all_reduce
           grads = cpu_group_all_reduce(grads)
+        elif self.params.kungfu_strategy == "cpu_all_reduce_noise":
+          from kungfu.ops import cpu_group_all_reduce_variance_monitor
+          grads = cpu_group_all_reduce_variance_monitor(grads, self.params.batch_size)
         elif self.params.kungfu_strategy == "nccl_all_reduce":
           from kungfu.ops import gpu_group_all_reduce
           grads = gpu_group_all_reduce(grads)
