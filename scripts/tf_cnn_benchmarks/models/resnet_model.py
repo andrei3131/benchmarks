@@ -330,6 +330,8 @@ class ResnetModel(model_lib.CNNModel):
     boundaries = [int(num_batches_per_epoch * x) for x in [30, 60, 80, 90]]
     values = [1, 0.1, 0.01, 0.001, 0.0001]
     values = [rescaled_lr * v for v in values]
+    print("LR Schedule: Boundaries: " + str(boundaries))
+    print("LR Schedule: LR values" + str(values))
     lr = tf.train.piecewise_constant(global_step, boundaries, values)
     warmup_steps = int(num_batches_per_epoch * 5)
     mlperf.logger.log(key=mlperf.tags.OPT_LR_WARMUP_STEPS, value=warmup_steps)

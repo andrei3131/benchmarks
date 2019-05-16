@@ -1,6 +1,6 @@
 # https://github.com/horovod/horovod/blob/master/Dockerfile
 
-FROM nvidia/cuda:9.0-base-ubuntu16.04
+FROM nvidia/cuda:9.0-base-ubuntu16.04 
 
 RUN apt-get update && \
         apt-get install -y --allow-downgrades --allow-change-held-packages --no-install-recommends \
@@ -43,8 +43,24 @@ RUN wget -q https://dl.google.com/go/go1.11.linux-amd64.tar.gz && \
     rm go1.11.linux-amd64.tar.gz
 ENV PATH=${PATH}:/usr/local/go/bin
 
+RUN mkdir /tmp/openmpi && \
+    cd /tmp/openmpi && \
+    wget https://www.open-mpi.org/software/ompi/v3.1/downloads/openmpi-3.1.2.tar.gz && \
+    tar zxf openmpi-3.1.2.tar.gz && \
+    cd openmpi-3.1.2 && \
+    ./configure --enable-orterun-prefix-by-default && \
+    make -j $(nproc) all && \
+    make install && \
+    ldconfig && \
+    rm -rf /tmp/openmpi
+
+# Install Horovod, temporarily using CUDA stubs
+RUN ldconfig /usr/local/cuda-10.0/targets/x86_64-linux/lib/stubs && \
+    HOROVOD_GPU_ALLREDUCE=NCCL HOROVOD_WITH_TENSORFLOW=1 pip3 install --no-cache-dir horovod && \
+    ldconfig
+
 # Add the KungFu sources
-ADD ~/kungfu-main /KungFu
+ADD ./KungFu /KungFu
 
 # Install KungFu
 RUN cd KungFu && \

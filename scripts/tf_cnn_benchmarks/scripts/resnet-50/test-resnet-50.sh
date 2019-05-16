@@ -21,7 +21,9 @@ NAME="imagenet"
 DATADIR=""
 # TF record data
 # DATADIR="/mnt/LSDSDataShare/projects/16-crossbow/platypus2/data/tf/imagenet/records"
-DATADIR="/fast/imagenet/validation"
+DATADIR="/data/imagenet/records"
+
+EVAL_BATCH_SIZE="50"
 
 # Only one of the two must be set
 EPOCHS=1
@@ -34,6 +36,8 @@ FLAGS="${FLAGS} --data_name=${NAME}"
 [ -n "${DATADIR}" ] && FLAGS="${FLAGS} --data_dir=${DATADIR}"
 
 FLAGS="${FLAGS} --num_epochs=${EPOCHS}"
+FLAGS="${FLAGS} --eval_batch_size=${EVAL_BATCH_SIZE}"
+
 
 # Defaults
 
@@ -43,14 +47,15 @@ FLAGS="${FLAGS} --tf_random_seed=1234"
 #
 # CPU/GPU configuration
 #
-NGPU=8
+NGPU=4
 
 FLAGS="${FLAGS} --num_gpus=${NGPU}"
 
 #
-# Hyper-parameters
+# Hyper-parameters for ResNet-32
 #
-BATCH_SIZE=50
+# Number of workers * batch size must divide the 
+BATCH_SIZE=50 # Unnecessary for evaluation; Use EVAL_BATCH_SIZE instead
 
 WEIGHT_DECAY="1e-4"
 # Configure optimiser
@@ -83,19 +88,28 @@ DISPLAY_INTERVAL=10
 
 CHECKPOINT_EVERY_N_EPOCHS="True"
 CHECKPOINT_INTERVAL=1
-CHECKPOINT_DIRECTORY="checkpoints/v-${VERSION}"
+#CHECKPOINT_DIRECTORY="/data/kungfu/checkpoints/andrei-checkpoints/kungfu-logs-validation/checkpoints-replicated-correct/v-${VERSION}"
 
 FLAGS="${FLAGS} --checkpoint_every_n_epochs=${CHECKPOINT_EVERY_N_EPOCHS}"
 FLAGS="${FLAGS} --checkpoint_interval=${CHECKPOINT_INTERVAL}"
-FLAGS="${FLAGS} --checkpoint_directory=${CHECKPOINT_DIRECTORY}"
+
+if [ -z "$1" ]
+  then
+    echo "Please supply the checkpoint directory as an argument."
+	exit 1
+fi
+
+FLAGS="${FLAGS} --checkpoint_directory=$1"
 
 FLAGS="${FLAGS} --data_format=NCHW"
 
 # AttributeError: '_ThreadPoolDataset' object has no attribute 'make_initializable_iterator'
 FLAGS="${FLAGS} --use_datasets=False"
 
+
+
 # Run.
 #
 echo "python tf_cnn_benchmarks.py $FLAGS"
-python tf_cnn_benchmarks.py $FLAGS
+python3 tf_cnn_benchmarks.py $FLAGS
 

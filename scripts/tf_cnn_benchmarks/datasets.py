@@ -37,6 +37,8 @@ IMAGENET_NUM_VAL_IMAGES = 50000
 COCO_NUM_TRAIN_IMAGES = 118287
 COCO_NUM_VAL_IMAGES = 4952
 
+CIFAR10_NUM_TRAIN_IMAGES = 50000
+CIFAR10_NUM_TEST_IMAGES = 10000
 
 class Dataset(object):
   """Abstract class for cnn benchmarks dataset."""
