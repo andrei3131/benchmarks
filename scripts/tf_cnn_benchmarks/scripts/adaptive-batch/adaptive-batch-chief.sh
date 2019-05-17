@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
-NUM_WORKERS=4
-
+NUM_WORKERS=8
+NUM_EPOCHS=140
+NOISE_FILES_PATH="/home/work/user-job-dir" # "/home/ab7515"
+CHECKPOINTS_PREFIX="/home/work/user-job-dir" # "/data/kungfu"
 
 train() {
     BATCH=$1
@@ -33,15 +35,16 @@ train() {
         --resize_method=bilinear \
         --display_every=1 \
         --run_version=$2 \
-        --train_dir=/data/kungfu/train_dir/v-${VERSION_ID} \
-        --checkpoint_directory=/data/kungfu/train_dir \
+        --train_dir=${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID} \
+        --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir \
         --checkpoint_every_n_epochs=True \
         --checkpoint_interval=1 \
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
         --winograd_nonfused=True 
-    echo "[END TRAINING KEY] training-parallel-${TRAIN_ID}"
+    echo "[END TRAINING KEYNOISE_FILES_PATH="/home/ab7515"
+] training-parallel-${TRAIN_ID}"
 }
 
 validate() {
@@ -58,7 +61,7 @@ validate() {
         --data_dir=/data/cifar-10/cifar-10-batches-py \
         --variable_update=replicated --data_format=NCHW --use_datasets=False --num_batches=50 --eval_batch_size=150 \
         --num_gpus=4 --use_tf_layers=True \
-        --checkpoint_directory=/data/kungfu/train_dir/v-${VERSION_ID} \
+        --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID} \
         --checkpoint_every_n_epochs=False 
     echo "[END VALIDATION KEY] validation-parallel-worker-${worker}-validation-id-${VALIDATION_ID}"
     done
@@ -94,8 +97,6 @@ get_future_batch() {
 }
 
 
-NUM_EPOCHS=4
-NOISE_FILES_PATH="/home/ab7515"
 NEW_NOISE_FILE_NAME="${NOISE_FILES_PATH}/median-noise.txt"
 
 
