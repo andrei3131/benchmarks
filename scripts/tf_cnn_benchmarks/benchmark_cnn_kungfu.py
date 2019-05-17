@@ -2735,9 +2735,10 @@ class BenchmarkCNN(object):
     # Checkpoint one last time?
     #
     # All workers checkpoint
-    if not (supervisor.saver and self.filepath):
-        raise ValueError("Undefined saver")
-    print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
+    if is_chief:
+      if not (supervisor.saver and self.filepath):
+          raise ValueError("Undefined saver")
+      print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
     sys.stdout.flush()
     supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
     
