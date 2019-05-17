@@ -48,7 +48,7 @@ validate() {
         --data_dir=/data/cifar-10/cifar-10-batches-py \
         --variable_update=replicated --data_format=NCHW --use_datasets=False --num_batches=50 --eval_batch_size=150 \
         --num_gpus=4 --use_tf_layers=True \
-        --train_dir=/data/kungfu/train_dir/ \
+        --checkpoint_directory=/data/kungfu/train_dir/ \
         --checkpoint_every_n_epochs=False 
     echo "[END VALIDATION KEY] validation-parallel-worker-${worker}-validation-id-${VALIDATION_ID}"
     done

@@ -2483,10 +2483,9 @@ class BenchmarkCNN(object):
                 eval_build_results = None
         (graph,
          result_to_benchmark) = self._preprocess_graph(graph, build_result)
-        print("STATUS: " + str(self.params.restore_checkpoint))
         with graph.as_default():
             if self.params.restore_checkpoint:
-                print("THIS MAY BE WHY IT GETS STUCK!!!")
+                andrei_print("WARNING: andrei")
                 return self._benchmark_graph_restore_checkpoint(
                     result_to_benchmark, eval_build_results)
             else:
@@ -2644,9 +2643,10 @@ class BenchmarkCNN(object):
                               'model.ckpt-*.index')
         filenames = gfile.Glob(pattern)
         if not filenames:
-            # raise ValueError('No files found matching {}'.format(pattern))
-            andrei_print("First, run running _benchmark_graph_instead")
-            return self._benchmark_graph(graph_info, eval_graph_info)
+            raise ValueError('No files found matching {}'.format(pattern))
+            # This fix runs normal benchmark without restoring from train_dir
+            #andrei_print("First, run running _benchmark_graph_instead")
+            #return self._benchmark_graph(graph_info, eval_graph_info)
         filenames = sorted(filenames,
                           key=lambda x: int(x.split('-')[-1].split('.')[0]))
         filename = filenames[-1]
@@ -2977,6 +2977,7 @@ class BenchmarkCNN(object):
             # 1. In non-single session mode, each step, the global_step is
             # incremented once per worker. This means we need to divide
             # init_global_step by num_workers only in non-single session mode.
+            andrei_print("Single session mode!!!")
             end_local_step = self.num_batches - self.init_global_step
         else:
             end_local_step = self.num_batches - (self.init_global_step //
