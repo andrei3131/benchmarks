@@ -1018,9 +1018,16 @@ def benchmark_one_step(sess,
             LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_1_accuracy'],
             LOSS_AND_ACCURACY_DIGITS_TO_SHOW, results['top_5_accuracy'])
         log_fn(log_str)
-      # All workers save the model checkpoints
-      if not (saver and filepath):
-         raise ValueError("Undefined saver & filepath")
+      #  Save the model checkpoint periodically
+      if params.variable_update == 'kungfu':
+         if int(os.getenv('KUNGFU_TEST_SELF_RANK')) == 0:
+            if not (saver and filepath):   
+               raise ValueError("Undefined saver & filepath")
+         else:
+            return (summary_str, lossval)
+      else:   
+         if not (saver and filepath):
+            raise ValueError("Undefined saver & filepath")
       
       print("DBG> Checkpoint at step", (step + 1))
       sys.stdout.flush()
@@ -1405,18 +1412,16 @@ class BenchmarkCNN(object):
     # Alexandros Koliousis (25 March 2019)
     #
     # Create checkpoint directory
-    if not self.params.eval:  
-        import os
-        if os.getenv('KUNGFU_TEST_SELF_RANK') is None:
-           self.filepath, self.version = _checkpoint_path(params.checkpoint_directory, 
-                                                          params.checkpoint_version)
-        else:
-            self.filepath, self.version = _checkpoint_path(params.checkpoint_directory + 
-                                                          '-worker-' + 
-                                                          str(int(os.getenv('KUNGFU_TEST_SELF_RANK'))),
-                                                          params.checkpoint_version)
-
-        print("DBG>", "%s (v. %d)" % (self.filepath, self.version))
+    import os
+    
+    if not self.params.eval:
+        is_chief = int(os.getenv('KUNGFU_TEST_SELF_RANK')) == 0
+        self.filepath = None
+        self.version   = None
+        if is_chief:
+            self.filepath, self.version = _checkpoint_path(params.checkpoint_directory,
+                  params.checkpoint_version)
+            print("DBG>", "%s (v. %d)" % (self.filepath, self.version))
 
     self.trace_filename = self.params.trace_file
     self.rewriter_config = self.params.rewriter_config
@@ -2067,6 +2072,9 @@ class BenchmarkCNN(object):
       raise ValueError('No files found matching {}'.format(pattern))
     filenames = sorted(filenames, key=lambda x: int(x.split('-')[-1].split('.')[0]))
 
+    # Only the last checkpoint
+    filenames = filenames[-1:]
+
     for filename in filenames:
 
       with tf.Session(target=target, config=create_config_proto(self.params)) as session:
@@ -2548,7 +2556,7 @@ class BenchmarkCNN(object):
         sess.run(graph_info.enqueue_ops[:(i + 1)])
         if image_producer is not None:
           image_producer.notify_image_consumption()
-    self.init_global_step, = sess.run([graph_info.global_step])
+    self.init_global_step = 0 # sess.run([graph_info.global_step])
     if self.job_name and not self.params.cross_replica_sync:
       # TODO(zhengxq): Do we need to use a global step watcher at all?
       global_step_watcher = GlobalStepWatcher(
@@ -2570,12 +2578,13 @@ class BenchmarkCNN(object):
           local_var_init_op_group=None, sess=sess)
     step_train_times = []
     log_fn('Running warm up')
-    local_step = -1 * self.num_warmup_batches
+    local_step = -1 * self.num_warmup_batches # 20 => -20
     if self.single_session:
       # In single session mode, each step, the global_step is incremented by
       # 1. In non-single session mode, each step, the global_step is
       # incremented once per worker. This means we need to divide
       # init_global_step by num_workers only in non-single session mode.
+      # end_local_step = 10 - 411 
       end_local_step = self.num_batches - self.init_global_step
     else:
       end_local_step = self.num_batches - (self.init_global_step //
@@ -2583,6 +2592,7 @@ class BenchmarkCNN(object):
     if not global_step_watcher:
       # In cross-replica sync mode, all workers must run the same number of
       # local steps, or else the workers running the extra step will block.
+                          # -20          # -401
       done_fn = lambda: local_step >= end_local_step
     else:
       done_fn = global_step_watcher.done
@@ -3527,6 +3537,9 @@ class BenchmarkCNN(object):
         elif self.params.kungfu_strategy == "cpu_all_reduce":
           from kungfu.ops import cpu_group_all_reduce
           grads = cpu_group_all_reduce(grads)
+        elif self.params.kungfu_strategy == "cpu_all_reduce_noise":
+          from kungfu.ops import cpu_group_all_reduce_variance_monitor
+          grads = cpu_group_all_reduce_variance_monitor(grads, self.batch_size)
         elif self.params.kungfu_strategy == "nccl_all_reduce":
           from kungfu.ops import gpu_group_all_reduce
           grads = gpu_group_all_reduce(grads)
