@@ -694,6 +694,10 @@ flags.DEFINE_float  ('checkpoint_interval', 0, '')
 flags.DEFINE_string ('checkpoint_directory', 'checkpoints', '')
 flags.DEFINE_integer('checkpoint_version',  1, '')
 
+# Andrei
+flags.DEFINE_integer('run_version', -1, '')
+
+
 platforms_util.define_platform_params()
 
 
@@ -1029,10 +1033,10 @@ def benchmark_one_step(sess,
          if not (saver and filepath):
             raise ValueError("Undefined saver & filepath")
       
-      print("DBG> Checkpoint at step", (step + 1))
-      sys.stdout.flush()
-      saver.save(sess, filepath, global_step=(step + 1), write_state=False)
-      print("DBG> Write checkpoint to the filepath", filepath)
+      # print("DBG> Checkpoint at step", (step + 1))
+      # sys.stdout.flush()
+      # saver.save(sess, filepath, write_state=False)
+      # print("DBG> Write checkpoint to the filepath", filepath)
 
   return (summary_str, lossval)
 
@@ -2461,6 +2465,16 @@ class BenchmarkCNN(object):
       # same time can cause race conditions.
       with tf.control_dependencies(local_var_init_ops):
         local_var_init_ops.append(eval_graph_info.local_var_init_op_group)
+    
+    modified_train_dir = self.params.train_dir
+    if self.params.run_version == 1:
+       print("First run: RUN VERSION is 1")
+    else:
+      tokens = self.params.train_dir.split("-")
+      changed_version = "%06d" % (self.params.run_version - 1)  
+      modified_train_dir = tokens[0] + "-" + changed_version
+
+    print("The train directory is where checkpoints are restored from: " + modified_train_dir)
     sv = tf.train.Supervisor(
         # For the purpose of Supervisor, all Horovod workers are 'chiefs',
         # since we want session to be initialized symmetrically on all the
@@ -2470,7 +2484,7 @@ class BenchmarkCNN(object):
                               or self.params.variable_update == 'kungfu'),
         # Log dir should be unset on non-chief workers to prevent Horovod
         # workers from corrupting each other's checkpoints.
-        logdir=self.params.train_dir if is_chief else None,
+        logdir=modified_train_dir if is_chief else None,
         ready_for_local_init_op=ready_for_local_init_op,
         local_init_op=local_var_init_ops,
         saver=saver,
@@ -2490,7 +2504,7 @@ class BenchmarkCNN(object):
                            path, filename, as_text)
 
     start_standard_services = (
-        self.params.train_dir or
+        modified_train_dir or
         self.dataset.queue_runner_required())
     target = self.cluster_manager.get_target() if self.cluster_manager else ''
     with sv.managed_session(
@@ -2739,8 +2753,8 @@ class BenchmarkCNN(object):
       if not (supervisor.saver and self.filepath):
           raise ValueError("Undefined saver")
       print("DBG>", "Checkpoint at step %d (one last time)" % num_steps)
-    sys.stdout.flush()
-    supervisor.saver.save(sess, self.filepath, global_step=num_steps, write_state=False)
+      sys.stdout.flush()
+      supervisor.saver.save(sess, self.filepath, write_state=False)
     
     num_steps_since_last_eval = local_step - last_eval_step
     mlperf.logger.log(

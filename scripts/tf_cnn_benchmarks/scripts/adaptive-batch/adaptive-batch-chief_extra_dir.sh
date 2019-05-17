@@ -3,15 +3,15 @@
 NUM_WORKERS=4
 
 
+PREV_CHECKPOINT_DIR=/data/kungfu/prev_checkpoints
+
 train() {
     BATCH=$1
     TRAIN_ID=$2
 
-    # Checkpoint version ID
-    VERSION_ID=$(printf "%06d" $(($2)))
-
     # 0 warm-up batches
     echo "[BEGIN TRAINING KEY] training-parallel-${TRAIN_ID}"
+    ## --train_dir=/data/kungfu/train_dir/v-${VERSION_ID} \
     kungfu-prun  -np ${NUM_WORKERS} -H 127.0.0.1:${NUM_WORKERS} -timeout 1000000s \
         python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
         --num_epochs=1 \
@@ -32,8 +32,7 @@ train() {
         --fuse_decode_and_crop=True \
         --resize_method=bilinear \
         --display_every=1 \
-        --run_version=$2 \
-        --train_dir=/data/kungfu/train_dir/v-${VERSION_ID} \
+        --train_dir=${PREV_CHECKPOINT_DIR} \
         --checkpoint_directory=/data/kungfu/train_dir \
         --checkpoint_every_n_epochs=True \
         --checkpoint_interval=1 \
@@ -46,9 +45,7 @@ train() {
 
 validate() {
     VALIDATION_ID=$1
-
-    # Checkpoint version ID
-    VERSION_ID=$(printf "%06d" $(($1)))
+    VERSION_ID=$2
 
     echo "VALIDATION VERSION_ID ${VERSION_ID}"
     for worker in 0 # 1 2 3 
@@ -94,9 +91,14 @@ get_future_batch() {
 }
 
 
-NUM_EPOCHS=4
+NUM_EPOCHS=2
 NOISE_FILES_PATH="/home/ab7515"
 NEW_NOISE_FILE_NAME="${NOISE_FILES_PATH}/median-noise.txt"
+
+
+rm -rf /data/kungfu/train_dir
+rm -rf ${PREV_CHECKPOINT_DIR}
+mkdir ${PREV_CHECKPOINT_DIR}
 
 
 FUTURE_BATCH=32
@@ -117,12 +119,20 @@ do
     runtime_batch_change=$((end-start))
     echo "[${runtime_batch_change} seconds] FUTURE_BATCH is ${FUTURE_BATCH}"
 
+    # Checkpoint version ID
+    VERSION_ID=$(printf "%06d" $(($i)))
+
     # Validate
     start=`date +%s`
-    validate ${i}
+    validate ${i} ${VERSION_ID}
     end=`date +%s`
     runtime_val=$((end-start))
     echo "Validation ${i} took: ${runtime_val}"
+
+    rm -rf ${PREV_CHECKPOINT_DIR}
+    mkdir ${PREV_CHECKPOINT_DIR}
+
+    mv /data/kungfu/train_dir/v-${VERSION_ID}/* ${PREV_CHECKPOINT_DIR}
 
     # Restore
     i=$[$i+1]
