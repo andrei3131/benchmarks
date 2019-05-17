@@ -2734,7 +2734,7 @@ class BenchmarkCNN(object):
     #
     # Checkpoint one last time?
     #
-    # All workers checkpoint
+    # Only chief checkpoints
     if is_chief:
       if not (supervisor.saver and self.filepath):
           raise ValueError("Undefined saver")
