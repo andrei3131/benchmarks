@@ -16,7 +16,7 @@ train() {
     echo "[BEGIN TRAINING KEY] training-parallel-${TRAIN_ID}"
     kungfu-prun  -np ${NUM_WORKERS} -H 127.0.0.1:${NUM_WORKERS} -timeout 1000000s \
         python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
-        --num_epochs=70 \
+        --num_epochs=1 \
         --num_gpus=1 \
         --eval=False \
         --forward_only=False \
@@ -24,7 +24,7 @@ train() {
         --print_training_accuracy=True \
         --batch_size=${BATCH} \
         --momentum=0.9 \
-        --weight_decay=0.0001 \
+        --weight_decay=0.001 \
         --optimizer=momentum \
         --staged_vars=False \
         --variable_update=kungfu \
@@ -87,8 +87,8 @@ get_future_batch() {
     for worker in {0..3}
     do
         FILE_NAME="${NOISE_FILES_PATH}/noise-worker-${worker}.txt"
-        FUTURE_BATCH=$(grep  -Eo '^[-+]?[0-9]+\.?[0-9]*$' ${FILE_NAME} | tail -100)
         echo ${FUTURE_BATCH} >> ${NEW_NOISE_FILE_NAME}
+        FUTURE_BATCH=$(grep  -Eo '^[-+]?[0-9]+\.?[0-9]*$' ${FILE_NAME} | tail -50)
     done
 
     FUTURE_BATCH=$(get_median ${NEW_NOISE_FILE_NAME})
@@ -101,7 +101,7 @@ get_future_batch() {
 NEW_NOISE_FILE_NAME="${NOISE_FILES_PATH}/median-noise.txt"
 
 
-FUTURE_BATCH=64
+FUTURE_BATCH=32
 i="1"
 while [ $i -le $NUM_EPOCHS ]
 do
@@ -112,19 +112,19 @@ do
     runtime_train=$((end-start))
     echo "Train ${i} took: ${runtime_train}"
 
-    # # Compute future batch
-    # start=`date +%s`
-    # FUTURE_BATCH=$(get_future_batch ${NEW_NOISE_FILE_NAME})
-    # end=`date +%s`
-    # runtime_batch_change=$((end-start))
-    # echo "[${runtime_batch_change} seconds] FUTURE_BATCH is ${FUTURE_BATCH}"
+    # Compute future batch
+    start=`date +%s`
+    FUTURE_BATCH=$(get_future_batch ${NEW_NOISE_FILE_NAME})
+    end=`date +%s`
+    runtime_batch_change=$((end-start))
+    echo "[${runtime_batch_change} seconds] FUTURE_BATCH is ${FUTURE_BATCH}"
 
-    # # Validate
-    # start=`date +%s`
-    # validate ${i}
-    # end=`date +%s`
-    # runtime_val=$((end-start))
-    # echo "Validation ${i} took: ${runtime_val}"
+    # Validate
+    start=`date +%s`
+    validate ${i}
+    end=`date +%s`
+    runtime_val=$((end-start))
+    echo "Validation ${i} took: ${runtime_val}"
 
     # Restore
     i=$[$i+1]

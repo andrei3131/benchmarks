@@ -696,7 +696,8 @@ flags.DEFINE_integer('checkpoint_version',  1, '')
 
 # Andrei
 flags.DEFINE_integer('run_version', -1, '')
-
+flags.DEFINE_float('noise_decay_factor', 0, 'Noise decay factor for gradient noise computation')
+flags.DEFINE_integer('running_sum_interval', 1, 'Running sum interval for batch size estimation from gradient noise')
 
 platforms_util.define_platform_params()
 
@@ -2472,9 +2473,9 @@ class BenchmarkCNN(object):
     else:
       tokens = self.params.train_dir.split("-")
       changed_version = "%06d" % (self.params.run_version - 1)  
-      modified_train_dir = tokens[0] + "-" + changed_version
+      modified_train_dir = '-'.join(tokens[:-1]) + "-" + changed_version
 
-    print("The train directory is where checkpoints are restored from: " + modified_train_dir)
+    print("The train directory where checkpoints are restored from: " + modified_train_dir)
     sv = tf.train.Supervisor(
         # For the purpose of Supervisor, all Horovod workers are 'chiefs',
         # since we want session to be initialized symmetrically on all the
@@ -3554,7 +3555,9 @@ class BenchmarkCNN(object):
           grads = cpu_group_all_reduce(grads)
         elif self.params.kungfu_strategy == "cpu_all_reduce_noise":
           from kungfu.ops import cpu_group_all_reduce_variance_monitor
-          grads = cpu_group_all_reduce_variance_monitor(grads, self.batch_size)
+          grads = cpu_group_all_reduce_variance_monitor(grads, self.batch_size, 
+                                                        noise_decay_factor=self.params.noise_decay_factor, 
+                                                        running_sum_interval=self.params.running_sum_interval)
         elif self.params.kungfu_strategy == "nccl_all_reduce":
           from kungfu.ops import gpu_group_all_reduce
           grads = gpu_group_all_reduce(grads)

@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
 
-NUM_WORKERS=4
+set -x
 
+cd /home/work/user-job-dir/benchmarks-fresh/scripts/tf_cnn_benchmarks/
 
-PREV_CHECKPOINT_DIR=/data/kungfu/prev_checkpoints
+python moxing/prepare_input.py
+
+NUM_WORKERS=8
+NUM_EPOCHS=140
+NOISE_FILES_PATH="/home/work/user-job-dir" # "/home/ab7515"
+CHECKPOINTS_PREFIX="/home/work/user-job-dir" # "/data/kungfu"
+
+ls /cache/data_dir
 
 train() {
     BATCH=$1
     TRAIN_ID=$2
 
+    # Checkpoint version ID
+    VERSION_ID=$(printf "%06d" $(($2)))
+
     # 0 warm-up batches
     echo "[BEGIN TRAINING KEY] training-parallel-${TRAIN_ID}"
-    ## --train_dir=/data/kungfu/train_dir/v-${VERSION_ID} \
     kungfu-prun  -np ${NUM_WORKERS} -H 127.0.0.1:${NUM_WORKERS} -timeout 1000000s \
-        python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
+        python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/cache/data_dir/cifar-10-batches-py \
         --num_epochs=1 \
         --num_gpus=1 \
         --eval=False \
@@ -27,13 +37,16 @@ train() {
         --staged_vars=False \
         --variable_update=kungfu \
         --kungfu_strategy=cpu_all_reduce_noise \
+        --running_sum_interval=300 \
+        --noise_decay_factor=0.001 \
         --use_datasets=True \
         --distortions=False \
         --fuse_decode_and_crop=True \
         --resize_method=bilinear \
         --display_every=1 \
-        --train_dir=${PREV_CHECKPOINT_DIR} \
-        --checkpoint_directory=/data/kungfu/train_dir \
+        --run_version=$2 \
+        --train_dir=${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID} \
+        --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir \
         --checkpoint_every_n_epochs=True \
         --checkpoint_interval=1 \
         --data_format=NCHW \
@@ -45,17 +58,19 @@ train() {
 
 validate() {
     VALIDATION_ID=$1
-    VERSION_ID=$2
+
+    # Checkpoint version ID
+    VERSION_ID=$(printf "%06d" $(($1)))
 
     echo "VALIDATION VERSION_ID ${VERSION_ID}"
     for worker in 0 # 1 2 3 
     do
     echo "[BEGIN VALIDATION KEY] validation-parallel-worker-${worker}-validation-id-${VALIDATION_ID}"
     python3 tf_cnn_benchmarks.py --eval=True --forward_only=False --model=resnet32 --data_name=cifar10 \
-        --data_dir=/data/cifar-10/cifar-10-batches-py \
+        --data_dir=/cache/data_dir/cifar-10-batches-py \
         --variable_update=replicated --data_format=NCHW --use_datasets=False --num_batches=50 --eval_batch_size=150 \
         --num_gpus=4 --use_tf_layers=True \
-        --checkpoint_directory=/data/kungfu/train_dir/v-${VERSION_ID} \
+        --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID} \
         --checkpoint_every_n_epochs=False 
     echo "[END VALIDATION KEY] validation-parallel-worker-${worker}-validation-id-${VALIDATION_ID}"
     done
@@ -91,20 +106,22 @@ get_future_batch() {
 }
 
 
-NUM_EPOCHS=2
-NOISE_FILES_PATH="/home/ab7515"
 NEW_NOISE_FILE_NAME="${NOISE_FILES_PATH}/median-noise.txt"
-
-
-rm -rf /data/kungfu/train_dir
-rm -rf ${PREV_CHECKPOINT_DIR}
-mkdir ${PREV_CHECKPOINT_DIR}
 
 
 FUTURE_BATCH=32
 i="1"
 while [ $i -le $NUM_EPOCHS ]
 do
+    echo $i
+    if [ $(($i%15)) -eq 0 ]
+    then
+        PREV=$(($i-3))
+        for ((prev = 0 ; prev < ${PREV} ; prev++)); do
+            VERSION_ID=$(printf "%06d" $(($prev)))
+            rm -rf ${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID}
+        done   
+    fi
     # Train
     start=`date +%s`
     train ${FUTURE_BATCH} ${i}
@@ -119,20 +136,12 @@ do
     runtime_batch_change=$((end-start))
     echo "[${runtime_batch_change} seconds] FUTURE_BATCH is ${FUTURE_BATCH}"
 
-    # Checkpoint version ID
-    VERSION_ID=$(printf "%06d" $(($i)))
-
     # Validate
     start=`date +%s`
-    validate ${i} ${VERSION_ID}
+    validate ${i}
     end=`date +%s`
     runtime_val=$((end-start))
     echo "Validation ${i} took: ${runtime_val}"
-
-    rm -rf ${PREV_CHECKPOINT_DIR}
-    mkdir ${PREV_CHECKPOINT_DIR}
-
-    mv /data/kungfu/train_dir/v-${VERSION_ID}/* ${PREV_CHECKPOINT_DIR}
 
     # Restore
     i=$[$i+1]
