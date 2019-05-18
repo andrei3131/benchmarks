@@ -653,7 +653,7 @@ flags.DEFINE_integer('save_model_secs', 0,
 flags.DEFINE_integer('save_model_steps', None,
                      'How often to save trained models. If specified, '
                      'save_model_secs must not be specified.')
-flags.DEFINE_integer('max_ckpts_to_keep', 5,
+flags.DEFINE_integer('max_ckpts_to_keep', 200,
                      'Max number of checkpoints to keep.')
 flags.DEFINE_string('train_dir', None,
                     'Path to session checkpoints. Pass None to disable saving '
@@ -698,6 +698,8 @@ flags.DEFINE_integer('checkpoint_version',  1, '')
 flags.DEFINE_integer('run_version', -1, '')
 flags.DEFINE_float('noise_decay_factor', 0, 'Noise decay factor for gradient noise computation')
 flags.DEFINE_integer('running_sum_interval', 1, 'Running sum interval for batch size estimation from gradient noise')
+flags.DEFINE_integer('future_batch_limit', 0, 'future_batch_limit')
+
 
 platforms_util.define_platform_params()
 
@@ -2475,7 +2477,8 @@ class BenchmarkCNN(object):
       changed_version = "%06d" % (self.params.run_version - 1)  
       modified_train_dir = '-'.join(tokens[:-1]) + "-" + changed_version
 
-    print("The train directory where checkpoints are restored from: " + modified_train_dir)
+    if modified_train_dir is not None:
+       print("The train directory where checkpoints are restored from: " + modified_train_dir)
     sv = tf.train.Supervisor(
         # For the purpose of Supervisor, all Horovod workers are 'chiefs',
         # since we want session to be initialized symmetrically on all the
@@ -3555,9 +3558,11 @@ class BenchmarkCNN(object):
           grads = cpu_group_all_reduce(grads)
         elif self.params.kungfu_strategy == "cpu_all_reduce_noise":
           from kungfu.ops import cpu_group_all_reduce_variance_monitor
+          print("I modified max_ckpts_to_keep from 5 to: " + str(self.params.max_ckpts_to_keep))
           grads = cpu_group_all_reduce_variance_monitor(grads, self.batch_size, 
                                                         noise_decay_factor=self.params.noise_decay_factor, 
-                                                        running_sum_interval=self.params.running_sum_interval)
+                                                        running_sum_interval=self.params.running_sum_interval,
+                                                        future_batch_limit=self.params.future_batch_limit)
         elif self.params.kungfu_strategy == "nccl_all_reduce":
           from kungfu.ops import gpu_group_all_reduce
           grads = gpu_group_all_reduce(grads)

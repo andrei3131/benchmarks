@@ -13,9 +13,11 @@ CHECKPOINTS_PREFIX="/home/work/user-job-dir" # "/data/kungfu"
 
 ls /cache/data_dir
 
+
 train() {
     BATCH=$1
     TRAIN_ID=$2
+    LR=$3
 
     # Checkpoint version ID
     VERSION_ID=$(printf "%06d" $(($2)))
@@ -28,7 +30,7 @@ train() {
         --num_gpus=1 \
         --eval=False \
         --forward_only=False \
-        --num_warmup_batches=20 \
+        --num_warmup_batches=0 \
         --print_training_accuracy=True \
         --batch_size=${BATCH} \
         --momentum=0.9 \
@@ -38,7 +40,8 @@ train() {
         --variable_update=kungfu \
         --kungfu_strategy=cpu_all_reduce_noise \
         --running_sum_interval=300 \
-        --noise_decay_factor=0.001 \
+        --noise_decay_factor=0.01 \
+        --future_batch_limit=512 \
         --use_datasets=True \
         --distortions=False \
         --fuse_decode_and_crop=True \
@@ -52,7 +55,8 @@ train() {
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
-        --winograd_nonfused=True 
+        --winograd_nonfused=True \
+        --piecewise_learning_rate_schedule="${LR};2;0.01"
     echo "[END TRAINING KEY] training-parallel-${TRAIN_ID}"
 }
 
@@ -68,7 +72,7 @@ validate() {
     echo "[BEGIN VALIDATION KEY] validation-parallel-worker-${worker}-validation-id-${VALIDATION_ID}"
     python3 tf_cnn_benchmarks.py --eval=True --forward_only=False --model=resnet32 --data_name=cifar10 \
         --data_dir=/cache/data_dir/cifar-10-batches-py \
-        --variable_update=replicated --data_format=NCHW --use_datasets=False --num_batches=50 --eval_batch_size=150 \
+        --variable_update=replicated --data_format=NCHW --use_datasets=False --num_epochs=1 --eval_batch_size=50 \
         --num_gpus=4 --use_tf_layers=True \
         --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID} \
         --checkpoint_every_n_epochs=False 
@@ -119,12 +123,30 @@ do
         PREV=$(($i-3))
         for ((prev = 0 ; prev < ${PREV} ; prev++)); do
             VERSION_ID=$(printf "%06d" $(($prev)))
-            rm -rf ${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID}
+            rm -rf ${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID}/*
         done   
     fi
+
+
+    LR=""
+    if [ $i -lt 120 ]
+    then
+        LR="0.01"    
+    fi
+    if [ $i -lt 80 ]
+    then
+        LR="0.1"    
+    fi
+    if [ $i -ge 120 ]
+    then
+        LR="0.001"    
+    fi
+    echo "EPOCH ${i}"
+    echo "LEARNING RATE $LR"
+
     # Train
     start=`date +%s`
-    train ${FUTURE_BATCH} ${i}
+    train ${FUTURE_BATCH} ${i} ${LR}
     end=`date +%s`
     runtime_train=$((end-start))
     echo "Train ${i} took: ${runtime_train}"

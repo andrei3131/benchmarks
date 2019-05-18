@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 
 NUM_WORKERS=4
-NUM_EPOCHS=140
+NUM_EPOCHS=1
 NOISE_FILES_PATH="/home/ab7515"
 CHECKPOINTS_PREFIX="/data/kungfu"
+
+
 
 train() {
     BATCH=$1
     TRAIN_ID=$2
-
+    LR=$3
     # Checkpoint version ID
     VERSION_ID=$(printf "%06d" $(($2)))
 
@@ -16,11 +18,11 @@ train() {
     echo "[BEGIN TRAINING KEY] training-parallel-${TRAIN_ID}"
     kungfu-prun  -np ${NUM_WORKERS} -H 127.0.0.1:${NUM_WORKERS} -timeout 1000000s \
         python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
-        --num_epochs=1 \
+        --num_epochs=4 \
         --num_gpus=1 \
         --eval=False \
         --forward_only=False \
-        --num_warmup_batches=20 \
+        --num_warmup_batches=0 \
         --print_training_accuracy=True \
         --batch_size=${BATCH} \
         --momentum=0.9 \
@@ -30,21 +32,22 @@ train() {
         --variable_update=kungfu \
         --kungfu_strategy=cpu_all_reduce_noise \
         --running_sum_interval=300 \
-        --noise_decay_factor=0.001 \
+        --noise_decay_factor=0.01 \
+        --future_batch_limit=512 \
         --use_datasets=True \
         --distortions=False \
         --fuse_decode_and_crop=True \
         --resize_method=bilinear \
-        --display_every=1 \
+        --display_every=100 \
         --run_version=$2 \
-        --train_dir=${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID} \
         --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir \
         --checkpoint_every_n_epochs=True \
         --checkpoint_interval=1 \
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
-        --winograd_nonfused=True 
+        --winograd_nonfused=True \
+        --piecewise_learning_rate_schedule="0.1;80;0.01;120;0.001"
     echo "[END TRAINING KEY] training-parallel-${TRAIN_ID}"
 }
 
@@ -60,9 +63,10 @@ validate() {
     echo "[BEGIN VALIDATION KEY] validation-parallel-worker-${worker}-validation-id-${VALIDATION_ID}"
     python3 tf_cnn_benchmarks.py --eval=True --forward_only=False --model=resnet32 --data_name=cifar10 \
         --data_dir=/data/cifar-10/cifar-10-batches-py \
-        --variable_update=replicated --data_format=NCHW --use_datasets=False --num_batches=50 --eval_batch_size=150 \
+        --variable_update=replicated --data_format=NCHW --use_datasets=False --num_epochs=1 --eval_batch_size=50 \
         --num_gpus=4 --use_tf_layers=True \
         --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID} \
+        --checkpoint_interval=1 \
         --checkpoint_every_n_epochs=False 
     echo "[END VALIDATION KEY] validation-parallel-worker-${worker}-validation-id-${VALIDATION_ID}"
     done
@@ -87,8 +91,8 @@ get_future_batch() {
     for worker in {0..3}
     do
         FILE_NAME="${NOISE_FILES_PATH}/noise-worker-${worker}.txt"
-        FUTURE_BATCH=$(grep  -Eo '^[-+]?[0-9]+\.?[0-9]*$' ${FILE_NAME} | tail -100)
         echo ${FUTURE_BATCH} >> ${NEW_NOISE_FILE_NAME}
+        FUTURE_BATCH=$(grep  -Eo '^[-+]?[0-9]+\.?[0-9]*$' ${FILE_NAME} | tail -50)
     done
 
     FUTURE_BATCH=$(get_median ${NEW_NOISE_FILE_NAME})
@@ -105,19 +109,36 @@ FUTURE_BATCH=32
 i="1"
 while [ $i -le $NUM_EPOCHS ]
 do
+
+    LR=""
+    if [ $i -lt 120 ]
+    then
+        LR="0.01"    
+    fi
+    if [ $i -lt 80 ]
+    then
+        LR="0.1"    
+    fi
+    if [ $i -ge 120 ]
+    then
+        LR="0.001"    
+    fi
+
+    echo "EPOCH ${i}"
+    echo "LEARNING RATE $LR"
     # Train
     start=`date +%s`
-    train ${FUTURE_BATCH} ${i}
+    train ${FUTURE_BATCH} ${i} ${LR}
     end=`date +%s`
     runtime_train=$((end-start))
     echo "Train ${i} took: ${runtime_train}"
 
-    # Compute future batch
-    start=`date +%s`
-    FUTURE_BATCH=$(get_future_batch ${NEW_NOISE_FILE_NAME})
-    end=`date +%s`
-    runtime_batch_change=$((end-start))
-    echo "[${runtime_batch_change} seconds] FUTURE_BATCH is ${FUTURE_BATCH}"
+    # # Compute future batch
+    # start=`date +%s`
+    # FUTURE_BATCH=$(get_future_batch ${NEW_NOISE_FILE_NAME})
+    # end=`date +%s`
+    # runtime_batch_change=$((end-start))
+    # echo "[${runtime_batch_change} seconds] FUTURE_BATCH is ${FUTURE_BATCH}"
 
     # Validate
     start=`date +%s`
