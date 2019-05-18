@@ -42,7 +42,7 @@ train() {
         --run_version=$2 \
         --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir \
         --checkpoint_every_n_epochs=True \
-        --checkpoint_interval=1 \
+        --checkpoint_interval=0.25 \
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
@@ -71,36 +71,6 @@ validate() {
     echo "[END VALIDATION KEY] validation-parallel-worker-${worker}-validation-id-${VALIDATION_ID}"
     done
 }
-
-compute_median() {
-    FILE=$1
-    sort -n ${FILE} | awk 'NF{a[NR]=$1;c++}END{print (c%2==0)?((a[c/2]+a[c/2+1])/2):a[c/2+1]}'
-}
-
-get_median() {
-    nums=$(<$1); 
-    list=(`for n in $nums; do printf "%10.06f\n" $n; done | sort -n`); 
-    #echo min ${list[0]}; 
-    #echo max ${list[${#list[*]}-1]}; 
-    echo ${list[${#list[*]}/2]};
-}
-
-
-get_future_batch() {
-    NEW_NOISE_FILE_NAME=$1
-    for worker in {0..3}
-    do
-        FILE_NAME="${NOISE_FILES_PATH}/noise-worker-${worker}.txt"
-        echo ${FUTURE_BATCH} >> ${NEW_NOISE_FILE_NAME}
-        FUTURE_BATCH=$(grep  -Eo '^[-+]?[0-9]+\.?[0-9]*$' ${FILE_NAME} | tail -50)
-    done
-
-    FUTURE_BATCH=$(get_median ${NEW_NOISE_FILE_NAME})
-    FUTURE_BATCH=$(printf '%.0f\n' ${FUTURE_BATCH})
-    echo "${FUTURE_BATCH}"
-    rm -f ${NEW_NOISE_FILE_NAME}
-}
-
 
 NEW_NOISE_FILE_NAME="${NOISE_FILES_PATH}/median-noise.txt"
 
@@ -132,13 +102,6 @@ do
     end=`date +%s`
     runtime_train=$((end-start))
     echo "Train ${i} took: ${runtime_train}"
-
-    # # Compute future batch
-    # start=`date +%s`
-    # FUTURE_BATCH=$(get_future_batch ${NEW_NOISE_FILE_NAME})
-    # end=`date +%s`
-    # runtime_batch_change=$((end-start))
-    # echo "[${runtime_batch_change} seconds] FUTURE_BATCH is ${FUTURE_BATCH}"
 
     # Validate
     start=`date +%s`

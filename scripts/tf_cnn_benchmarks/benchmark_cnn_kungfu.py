@@ -1036,6 +1036,7 @@ def benchmark_one_step(sess,
          if not (saver and filepath):
             raise ValueError("Undefined saver & filepath")
       
+      # Andrei-Octavian: comment this to make it work with adaptive batch
       # print("DBG> Checkpoint at step", (step + 1))
       # sys.stdout.flush()
       # saver.save(sess, filepath, write_state=False)
