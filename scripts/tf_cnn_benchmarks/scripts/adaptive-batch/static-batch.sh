@@ -18,7 +18,7 @@ train() {
     echo "[BEGIN TRAINING KEY] training-parallel-${TRAIN_ID}"
     kungfu-prun  -np ${NUM_WORKERS} -H 127.0.0.1:${NUM_WORKERS} -timeout 1000000s \
         python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
-        --num_epochs=4 \
+        --num_epochs=50 \
         --num_gpus=1 \
         --eval=False \
         --forward_only=False \
@@ -38,7 +38,7 @@ train() {
         --distortions=False \
         --fuse_decode_and_crop=True \
         --resize_method=bilinear \
-        --display_every=100 \
+        --display_every=1 \
         --run_version=$2 \
         --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir \
         --checkpoint_every_n_epochs=True \
@@ -46,8 +46,7 @@ train() {
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
-        --winograd_nonfused=True \
-        --piecewise_learning_rate_schedule="0.1;80;0.01;120;0.001"
+        --winograd_nonfused=True
     echo "[END TRAINING KEY] training-parallel-${TRAIN_ID}"
 }
 
@@ -66,7 +65,7 @@ validate() {
         --variable_update=replicated --data_format=NCHW --use_datasets=False --num_epochs=1 --eval_batch_size=50 \
         --num_gpus=4 --use_tf_layers=True \
         --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir/v-${VERSION_ID} \
-        --checkpoint_interval=1 \
+        --checkpoint_interval=0.25 \
         --checkpoint_every_n_epochs=False 
     echo "[END VALIDATION KEY] validation-parallel-worker-${worker}-validation-id-${VALIDATION_ID}"
     done
@@ -75,7 +74,7 @@ validate() {
 NEW_NOISE_FILE_NAME="${NOISE_FILES_PATH}/median-noise.txt"
 
 
-FUTURE_BATCH=32
+FUTURE_BATCH=64
 i="1"
 while [ $i -le $NUM_EPOCHS ]
 do

@@ -1037,10 +1037,10 @@ def benchmark_one_step(sess,
             raise ValueError("Undefined saver & filepath")
       
       # Andrei-Octavian: comment this to make it work with adaptive batch
-      # print("DBG> Checkpoint at step", (step + 1))
-      # sys.stdout.flush()
-      # saver.save(sess, filepath, write_state=False)
-      # print("DBG> Write checkpoint to the filepath", filepath)
+      print("DBG> Checkpoint at step", (step + 1))
+      sys.stdout.flush()
+      saver.save(sess, filepath, global_step=(step+1), write_state=False)
+      print("DBG> Write checkpoint to the filepath", filepath)
 
   return (summary_str, lossval)
 
@@ -2081,7 +2081,7 @@ class BenchmarkCNN(object):
     filenames = sorted(filenames, key=lambda x: int(x.split('-')[-1].split('.')[0]))
 
     # Only the last checkpoint
-    filenames = filenames[-1:]
+    filenames = filenames
 
     for filename in filenames:
 
