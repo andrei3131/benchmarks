@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 NUM_WORKERS=4
-NUM_EPOCHS=140
+NUM_EPOCHS=25
 NOISE_FILES_PATH="/home/ab7515"
 CHECKPOINTS_PREFIX="/data/kungfu"
 
@@ -33,7 +33,7 @@ train() {
         --kungfu_strategy=cpu_all_reduce_noise \
         --running_sum_interval=300 \
         --noise_decay_factor=0.01 \
-        --future_batch_limit=512 \
+        --future_batch_limit=1050 \
         --use_datasets=True \
         --distortions=False \
         --fuse_decode_and_crop=True \
@@ -47,8 +47,9 @@ train() {
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
-        --winograd_nonfused=True \
-        --piecewise_learning_rate_schedule="${LR};2;0.01"
+        --winograd_nonfused=True 
+    # I removed piecewise learning rate schedule and
+    # added 20 warmup batches
     echo "[END TRAINING KEY] training-parallel-${TRAIN_ID}"
 }
 

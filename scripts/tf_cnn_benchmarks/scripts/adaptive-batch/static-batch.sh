@@ -18,7 +18,7 @@ train() {
     echo "[BEGIN TRAINING KEY] training-parallel-${TRAIN_ID}"
     kungfu-prun  -np ${NUM_WORKERS} -H 127.0.0.1:${NUM_WORKERS} -timeout 1000000s \
         python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
-        --num_epochs=50 \
+        --num_epochs=25 \
         --num_gpus=1 \
         --eval=False \
         --forward_only=False \
@@ -30,10 +30,7 @@ train() {
         --optimizer=momentum \
         --staged_vars=False \
         --variable_update=kungfu \
-        --kungfu_strategy=cpu_all_reduce_noise \
-        --running_sum_interval=300 \
-        --noise_decay_factor=0.01 \
-        --future_batch_limit=512 \
+        --kungfu_strategy=cpu_all_reduce \
         --use_datasets=True \
         --distortions=False \
         --fuse_decode_and_crop=True \
@@ -42,7 +39,7 @@ train() {
         --run_version=$2 \
         --checkpoint_directory=${CHECKPOINTS_PREFIX}/train_dir \
         --checkpoint_every_n_epochs=True \
-        --checkpoint_interval=0.25 \
+        --checkpoint_interval=1 \
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
@@ -74,7 +71,7 @@ validate() {
 NEW_NOISE_FILE_NAME="${NOISE_FILES_PATH}/median-noise.txt"
 
 
-FUTURE_BATCH=64
+FUTURE_BATCH=1024
 i="1"
 while [ $i -le $NUM_EPOCHS ]
 do
