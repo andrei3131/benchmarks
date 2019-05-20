@@ -173,8 +173,6 @@ flags.DEFINE_integer('batch_size', 0, 'batch size per compute device')
 #
 # Andrei-Octavian Brabete
 # Synchronization Strategy Flags
-flags.DEFINE_boolean('restore_checkpoint', False,
-                     'restore checkpoint on this training session')
 flags.DEFINE_integer('ako_partitions', 1, 'number of Ako partitions')
 flags.DEFINE_float('partial_exchange_fraction', 0,
                    'Fraction of gradients to exchange')
@@ -2484,13 +2482,8 @@ class BenchmarkCNN(object):
         (graph,
          result_to_benchmark) = self._preprocess_graph(graph, build_result)
         with graph.as_default():
-            if self.params.restore_checkpoint:
-                andrei_print("WARNING: andrei")
-                return self._benchmark_graph_restore_checkpoint(
-                    result_to_benchmark, eval_build_results)
-            else:
-                    return self._benchmark_graph(result_to_benchmark,
-                                                    eval_build_results)
+             return self._benchmark_graph(result_to_benchmark,
+                                          eval_build_results)
                 
     GPU_CACHED_INPUT_VARIABLE_NAME = 'gpu_cached_inputs'
 
@@ -2571,186 +2564,6 @@ class BenchmarkCNN(object):
                          global_step=global_step,
                          local_var_init_op_group=local_var_init_op_group,
                          summary_op=summary_op)
-
-    # Andrei - Octavian Brabete
-    def _benchmark_graph_restore_checkpoint(self, graph_info, eval_graph_info):
-        """Benchmark the training graph.
-
-      # Args:
-      #   graph_info: the namedtuple returned by _build_graph() which
-      #     contains all necessary information to benchmark the graph, including
-      #     named tensors/ops list, fetches, etc.
-      #   eval_graph_info: Similar to graph_info but for the eval graph if
-      #     --eval_during_training_* is used. Otherwise, None.
-      # Returns:
-      #   Dictionary containing training statistics (num_workers, num_steps,
-      #   average_wall_time, images_per_sec).
-      # """
-
-        log_fn('Initializing graph')
-        if self.params.variable_update == 'horovod':
-            import horovod.tensorflow as hvd  # pylint: disable=g-import-not-at-top
-            # First worker will be 'chief' - it will write summaries and
-            # save checkpoints.
-            is_chief = hvd.rank() == 0
-        if self.params.variable_update == 'kungfu':
-            is_chief = int(os.getenv('KUNGFU_TEST_SELF_RANK')) == 0
-        else:
-            is_chief = (not self.job_name or self.task_index == 0)
-
-        summary_writer = None
-        if (is_chief and self.params.summary_verbosity and self.params.train_dir
-                and self.params.save_summaries_steps > 0):
-            summary_writer = tf.summary.FileWriter(self.params.train_dir,
-                                                  tf.get_default_graph())
-
-        # We want to start the benchmark timer right after a image_producer barrier
-        # and avoids undesired waiting times on barriers.
-        if ((self.num_warmup_batches + len(graph_info.enqueue_ops) - 1) %
-                self.batch_group_size) != 0:
-            self.num_warmup_batches = int(
-                math.ceil(
-                    (self.num_warmup_batches + len(graph_info.enqueue_ops) - 1.0) /
-                    (self.batch_group_size)) * self.batch_group_size -
-                len(graph_info.enqueue_ops) + 1)
-            log_fn('Round up warm up steps to %d to match batch_group_size' %
-                  self.num_warmup_batches)
-            assert ((self.num_warmup_batches + len(graph_info.enqueue_ops) - 1) %
-                    self.batch_group_size) == 0
-        # We run the summaries in the same thread as the training operations by
-        # passing in None for summary_op to avoid a summary_thread being started.
-        # Running summaries and training operations in parallel could run out of
-        # GPU memory.
-        if is_chief and not self.forward_only_and_freeze:
-            saver = tf.train.Saver(self.variable_mgr.savable_variables(),
-                                  save_relative_paths=True,
-                                  max_to_keep=self.params.max_ckpts_to_keep)
-
-        if self.params.variable_update == 'kungfu' and not is_chief:
-            saver = tf.train.Saver(self.variable_mgr.savable_variables(),
-                                  save_relative_paths=True,
-                                  max_to_keep=self.params.max_ckpts_to_keep)
-
-        # HERE
-        # Andrei
-        saver = tf.train.Saver(self.variable_mgr.savable_variables())
-        target = ''
-
-        # pattern = os.path.join(self.params.checkpoint_directory,
-        #                       'model.ckpt-*.index')
-
-        pattern = os.path.join(self.params.train_dir,
-                              'model.ckpt-*.index')
-        filenames = gfile.Glob(pattern)
-        if not filenames:
-            raise ValueError('No files found matching {}'.format(pattern))
-            # This fix runs normal benchmark without restoring from train_dir
-            #andrei_print("First, run running _benchmark_graph_instead")
-            #return self._benchmark_graph(graph_info, eval_graph_info)
-        filenames = sorted(filenames,
-                          key=lambda x: int(x.split('-')[-1].split('.')[0]))
-        filename = filenames[-1]
-
-        if not filename.endswith(".index"):
-            raise ValueError("Fatal error")
-        checkpoint = filename[:-len(".index")]
-        step = int(checkpoint.split("-")[-1])
-
-        target = ''
-        sess = tf.Session(target=target,
-                        config=create_config_proto(self.params)) 
-        try:
-                log_fn('Restoring checkpoint from %s' % checkpoint)
-                saver.restore(sess, checkpoint)
-        except:
-                log_fn('Failed to restore checkpoint %s' % checkpoint)
-                
-        ready_for_local_init_op = None
-        if self.job_name and not (self.single_session
-                                  or self.distributed_collective):
-            # In distributed mode, we don't want to run local_var_init_op_group until
-            # the global variables are initialized, because local_var_init_op_group
-            # may use global variables (such as in distributed replicated mode). We
-            # don't set this in non-distributed mode, because in non-distributed mode,
-            # local_var_init_op_group may itself initialize global variables (such as
-            # in replicated mode).
-            ready_for_local_init_op = tf.report_uninitialized_variables(
-                tf.global_variables())
-        if self.params.variable_update == 'horovod':
-            import horovod.tensorflow as hvd  # pylint: disable=g-import-not-at-top
-            bcast_global_variables_op = hvd.broadcast_global_variables(0)
-        elif self.params.variable_update == 'kungfu':
-            import kungfu as kf
-            bcast_global_variables_op = kf.distributed_variables_initializer()
-        else:
-            bcast_global_variables_op = None
-
-        if self.params.variable_update == 'collective_all_reduce':
-            # It doesn't matter what this collective_graph_key value is,
-            # so long as it's > 0 and the same at every worker.
-            init_run_options = tf.RunOptions()
-            init_run_options.experimental.collective_graph_key = 6
-        else:
-            init_run_options = tf.RunOptions()
-        local_var_init_ops = [graph_info.local_var_init_op_group]
-        if eval_graph_info:
-            # `eval_graph_info.local_var_init_op_group` also includes some of the
-            # training initializer ops, since it's difficult to filter them out.
-            # Rerunning the training initializer ops is OK, but we add a control
-            # dependency since running two sets of training initializer ops at the
-            # same time can cause race conditions.
-            with tf.control_dependencies(local_var_init_ops):
-                local_var_init_ops.append(eval_graph_info.local_var_init_op_group)
-        sv = tf.train.Supervisor(
-            # For the purpose of Supervisor, all Horovod workers are 'chiefs',
-            # since we want session to be initialized symmetrically on all the
-            # workers.
-            is_chief=is_chief or (self.params.variable_update == 'horovod'
-                                  or self.distributed_collective
-                                  or self.params.variable_update == 'kungfu'),
-            # Log dir should be unset on non-chief workers to prevent Horovod
-            # workers from corrupting each other's checkpoints.
-            logdir=self.params.train_dir if is_chief else None,
-            ready_for_local_init_op=ready_for_local_init_op,
-            local_init_op=local_var_init_ops,
-            saver=saver,
-            global_step=graph_info.global_step,
-            summary_op=None,
-            save_model_secs=self.params.save_model_secs,
-            summary_writer=summary_writer,
-            local_init_run_options=init_run_options)
-
-        profiler = tf.profiler.Profiler() if self.params.tfprof_file else None
-        if self.graph_file is not None:
-            path, filename = os.path.split(self.graph_file)
-            as_text = filename.endswith('txt')
-            log_fn('Writing GraphDef as %s to %s' % (  # pyformat break
-                'text' if as_text else 'binary', self.graph_file))
-            tf.train.write_graph(
-                tf.get_default_graph().as_graph_def(add_shapes=True), path,
-                filename, as_text)
-
-        start_standard_services = (self.params.train_dir
-                                  or self.dataset.queue_runner_required())
-        target = self.cluster_manager.get_target() if self.cluster_manager else ''
-
-
-        with sess:
-            try:
-                stats = self.benchmark_with_session(sess, sv, graph_info,
-                                                    eval_graph_info,
-                                                    bcast_global_variables_op,
-                                                    is_chief, summary_writer,
-                                                    profiler)
-            except:
-                raise RuntimeError(
-                    'Received OutOfRangeError. Wrapping in Runtime error to avoid '
-                    'Supervisor from suppressing the error. Original OutOfRangeError '
-                    'with traceback:\n' + traceback.format_exc())
-        sv.stop()
-        if profiler:
-            generate_tfprof_profile(profiler, self.params.tfprof_file)
-        return stats
 
     def _benchmark_graph(self, graph_info, eval_graph_info):
         """Benchmark the training graph.
