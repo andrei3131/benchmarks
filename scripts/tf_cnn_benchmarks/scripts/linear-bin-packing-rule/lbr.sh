@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 
+STRATEGY=$1
+SCHEDULE=$2
+RUN=$3
 
+#adaptive_partial_exchange_with_cpu_allreduce
 train() {
     BATCH=$1
-    RUNID=$2
-    VERSION=1
-    echo "[BEGIN TRAINING KEY] training-parallel"
-    ~/KungFu/bin/kungfu-prun  -np 4 -H 127.0.0.1:4 -timeout 1000000s \
+    echo "[BEGIN TRAINING KEY] training-lbr-${RUN}"
+    /ab7515/KungFu/bin/kungfu-prun  -np 4 -H 127.0.0.1:4 -timeout 1000000s \
         python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
-        --num_epochs=10 \
+        --num_epochs=140 \
         --eval=False \
         --forward_only=False \
         --print_training_accuracy=True \
@@ -20,8 +22,8 @@ train() {
         --optimizer=momentum \
         --staged_vars=False \
         --variable_update=kungfu \
-        --kungfu_strategy=adaptive_partial_exchange_with_cpu_allreduce \
-        --piecewise_partial_exchange_schedule="0:0.1,3:0.2,5:0.9,8:1"\
+        --kungfu_strategy=${STRATEGY} \
+        --piecewise_partial_exchange_schedule=${SCHEDULE} \
         --partial_exchange_fraction=0.1 \
         --use_datasets=True \
         --distortions=False \
@@ -30,31 +32,28 @@ train() {
         --display_every=100 \
         --checkpoint_every_n_epochs=True \
         --checkpoint_interval=0.25 \
-        --checkpoint_directory=/home/ab7515/dummy-checkpoint \
-        --checkpoint_version=${VERSION} \
+        --checkpoint_directory=/data/kungfu/checkpoints-lbr/checkpoint \
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
         --winograd_nonfused=True 
-    echo "[END TRAINING KEY] training-parallel"
+    echo "[END TRAINING KEY] training-lbr-${RUN}"
 }
 
 validate() {
-    RUNID=$1
-    for worker in 0 # 1 2 3 4 5 6 7  
+    for worker in 0 1 2 3 # 4 5 6 7  
     do
-    echo "[BEGIN VALIDATION KEY] validation-parallel-worker-${worker}"
+    echo "[BEGIN VALIDATION KEY] validation-lbr-${RUN}-worker-${worker}"
     python3 tf_cnn_benchmarks.py --eval=True --forward_only=False --model=resnet32 --data_name=cifar10 \
         --data_dir=/data/cifar-10/cifar-10-batches-py \
         --variable_update=replicated --data_format=NCHW --use_datasets=False --num_batches=50 --eval_batch_size=50 \
         --num_gpus=4 --use_tf_layers=True \
-        --checkpoint_directory=/data/kungfu/train_dir/checkpoints-parallel-${RUNID}-worker-${worker}/v-000001 --checkpoint_interval=0.25 \
+        --checkpoint_directory=/data/kungfu/checkpoints-lbr/checkpoint-worker-${worker}/v-000001 --checkpoint_interval=0.25 \
         --checkpoint_every_n_epochs=True 
-    echo "[END VALIDATION KEY] validation-parallel-worker-${worker}"
+    echo "[END VALIDATION KEY] validation-lbr-${RUN}-worker-${worker}"
     done
 }
 
 
-RUN=1
-train 64 ${RUN}
-validate ${RUN}
+train 64
+validate

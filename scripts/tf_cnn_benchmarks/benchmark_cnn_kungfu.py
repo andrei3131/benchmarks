@@ -2757,7 +2757,7 @@ class BenchmarkCNN(object):
                 if image_producer is not None:
                     image_producer.notify_image_consumption()
         self.init_global_step, = sess.run([graph_info.global_step])
-        print("When running the step, the init_global_step is: " + str(self.init_global_step))
+
         if self.job_name and not self.params.cross_replica_sync:
             # TODO(zhengxq): Do we need to use a global step watcher at all?
             global_step_watcher = GlobalStepWatcher(
@@ -2783,14 +2783,11 @@ class BenchmarkCNN(object):
         step_train_times = []
         log_fn('Running warm up')
         local_step = -1 * self.num_warmup_batches
-        print("The local step is: " + str(local_step))
-        print("num_workers: " + str(self.num_workers))
         if self.single_session:
             # In single session mode, each step, the global_step is incremented by
             # 1. In non-single session mode, each step, the global_step is
             # incremented once per worker. This means we need to divide
             # init_global_step by num_workers only in non-single session mode.
-            andrei_print("Single session mode!!!")
             end_local_step = self.num_batches - self.init_global_step
         else:
             end_local_step = self.num_batches - (self.init_global_step //
