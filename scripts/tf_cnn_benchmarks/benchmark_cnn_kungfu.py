@@ -345,7 +345,7 @@ flags.DEFINE_boolean(
     'If True, the trace_file, if specified, will be in a '
     'Chrome trace format. If False, then it will be a '
     'StepStats raw proto.')
-_NUM_STEPS_TO_PROFILE = 10
+_NUM_STEPS_TO_PROFILE = 25
 _NUM_OPS_TO_PRINT = 20
 flags.DEFINE_string('tfprof_file', None,
                     'If specified, write a tfprof ProfileProto to this file. '
@@ -3773,7 +3773,10 @@ class BenchmarkCNN(object):
                 ]
 
             if self.params.variable_update == 'kungfu':
-                if self.params.kungfu_strategy == "partial_exchange":
+                if self.params.kungfu_strategy == "ako_p2p":
+                    from kungfu.ops import ako_p2p
+                    grads = ako_p2p(grads, self.params.partial_exchange_fraction)   
+                elif self.params.kungfu_strategy == "partial_exchange":
                     from kungfu.ops import partial_exchange_group_all_reduce
                     num_train = datasets.CIFAR10_NUM_TRAIN_IMAGES if self.params.data_name == "cifar10" else datasets.IMAGENET_NUM_TRAIN_IMAGES
                     grads = partial_exchange_group_all_reduce(
@@ -3782,10 +3785,19 @@ class BenchmarkCNN(object):
                         num_train,
                         fraction=self.params.partial_exchange_fraction,
                         accumulate=False)
-                elif self.params.kungfu_strategy == "adaptive_partial_exchange_with_cpu_allreduce":
-                    from kungfu.ops import adaptive_partial_exchange_with_cpu_allreduce
+                elif self.params.kungfu_strategy == "partial_exchange_with_schedule":
+                    from kungfu.ops import partial_exchange_group_all_reduce_with_schedule
                     num_train = datasets.CIFAR10_NUM_TRAIN_IMAGES if self.params.data_name == "cifar10" else datasets.IMAGENET_NUM_TRAIN_IMAGES
-                    grads = adaptive_partial_exchange_with_cpu_allreduce(
+                    grads = partial_exchange_group_all_reduce_with_schedule(
+                        grads,
+                        self.params.batch_size,
+                        num_train,
+                        self.params.piecewise_partial_exchange_schedule,
+                        )
+                elif self.params.kungfu_strategy == "adaptive_partial_exchange_with_gpu_allreduce":
+                    from kungfu.ops import adaptive_partial_exchange_with_gpu_allreduce
+                    num_train = datasets.CIFAR10_NUM_TRAIN_IMAGES if self.params.data_name == "cifar10" else datasets.IMAGENET_NUM_TRAIN_IMAGES
+                    grads = adaptive_partial_exchange_with_gpu_allreduce(
                         grads,
                         self.params.batch_size,
                         num_train,
@@ -3798,8 +3810,8 @@ class BenchmarkCNN(object):
                         fraction=self.params.partial_exchange_fraction,
                         accumulate=False)
                 elif self.params.kungfu_strategy == "gpu_partial_exchange_frontend_partitioning":
-                    from kungfu.ops import gpu_partial_exchange_group_all_reduce_front_end_partitioning
-                    grads = gpu_partial_exchange_group_all_reduce_front_end_partitioning(
+                    from kungfu.ops import partial_exchange_with_gpu_allreduce
+                    grads = partial_exchange_with_gpu_allreduce(
                         grads,
                         fraction=self.params.partial_exchange_fraction,
                         accumulate=False)

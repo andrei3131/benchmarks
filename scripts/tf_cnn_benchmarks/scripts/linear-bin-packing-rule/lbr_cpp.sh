@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 
 
-#/data/kungfu/checkpoints-lbr/checkpoint \
+mkdir /data/kungfu/checkpoints-lbr
+
+pkill -f python3
+cd /ab7515/KungFu
+env KUNGFU_USE_NCCL=0 pip3 install --no-index --user -U .
+cd /ab7515/benchmarks/benchmarks-fresh/scripts/tf_cnn_benchmarks
+
 
 RUN=1
 #adaptive_partial_exchange_with_cpu_allreduce
 train() {
     BATCH=$1
     echo "[BEGIN TRAINING KEY] training-lbr-${RUN}"
-    /home/ab7515/KungFu/bin/kungfu-prun  -np 4 -H 127.0.0.1:4 -timeout 1000000s \
+    kungfu-prun  -np 4 -H 127.0.0.1:4 -timeout 1000000s \
         python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
-        --num_epochs=10 \
+        --num_epochs=1 \
         --eval=False \
         --forward_only=False \
         --print_training_accuracy=True \
@@ -22,8 +28,8 @@ train() {
         --optimizer=momentum \
         --staged_vars=False \
         --variable_update=kungfu \
-        --kungfu_strategy=adaptive_partial_exchange_with_gpu_allreduce \
-        --piecewise_partial_exchange_schedule="0:0.1,80:0.4,120:1" \
+        --piecewise_partial_exchange_schedule="0:0.1,2:0.4,4:1" \
+        --kungfu_strategy=partial_exchange_with_schedule \
         --use_datasets=True \
         --distortions=False \
         --fuse_decode_and_crop=True \
@@ -31,18 +37,16 @@ train() {
         --display_every=100 \
         --checkpoint_every_n_epochs=True \
         --checkpoint_interval=0.25 \
-        --checkpoint_directory=/home/ab7515/checkpoints-lbr \
+        --checkpoint_directory=/data/kungfu/checkpoints-lbr/checkpoint \
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
-        --winograd_nonfused=True \
-        --trace_file=/data/kungfu/trace-andrei.json \
-        --use_chrome_trace_format=True
+        --winograd_nonfused=True
     echo "[END TRAINING KEY] training-lbr-${RUN}"
 }
 
 validate() {
-    for worker in 0 1 2 3 # 4 5 6 7  
+    for worker in 0 # 1 2 3 # 4 5 6 7  
     do
     echo "[BEGIN VALIDATION KEY] validation-lbr-${RUN}-worker-${worker}"
     python3 tf_cnn_benchmarks.py --eval=True --forward_only=False --model=resnet32 --data_name=cifar10 \
@@ -57,4 +61,4 @@ validate() {
 
 
 train 64
-#validate
+# validate
