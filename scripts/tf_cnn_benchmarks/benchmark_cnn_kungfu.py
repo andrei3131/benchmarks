@@ -184,6 +184,12 @@ flags.DEFINE_string(
                     partial_exchange_accumulation_avg_peers, partial_exchange_accumulation_avg_window. \
                     If not specified, default is parallel')
 
+flags.DEFINE_enum('type_of_decentralized_synchronization', 'sync_gpu', ('sync_cpu', 'async_cpu', 'sync_gpu', 'async_gpu'),
+                  'Name of Decentralized Synchronization Strategy')
+
+
+
+
 flags.DEFINE_integer('eval_batch_size', 0,
                      'eval batch size per compute device')
 flags.DEFINE_integer(
@@ -367,7 +373,7 @@ flags.DEFINE_string(
     'If specified, after the graph has been partitioned and '
     'optimized, write out each partitioned graph to a file '
     'with the given prefix.')
-flags.DEFINE_enum('optimizer', 'sgd', ('momentum', 'sgd', 'rmsprop', 'adam'),
+flags.DEFINE_enum('optimizer', 'sgd', ('p2p_averaging', 'momentum', 'sgd', 'rmsprop', 'adam'),
                   'Optimizer to use')
 flags.DEFINE_float('init_learning_rate', None,
                    'Initial learning rate for training.')
@@ -1457,7 +1463,17 @@ def get_learning_rate(params, global_step, num_examples_per_epoch, model,
 
 def get_optimizer(params, learning_rate):
     """Returns the optimizer that should be used based on params."""
-    if params.optimizer == 'momentum':
+    if params.optimizer == 'p2p_averaging':
+        mlperf.logger.log(key=mlperf.tags.OPT_NAME,
+                          value=mlperf.tags.SGD_WITH_MOMENTUM)
+        mlperf.logger.log(key=mlperf.tags.OPT_MOMENTUM, value=params.momentum)
+        opt = tf.train.MomentumOptimizer(learning_rate,
+                                         params.momentum,
+                                         use_nesterov=True)
+        from kungfu.optimizers import DecentralizedP2P
+        print("BIG WARNING: YOU SHOULD ENSURE THAT THE DecentralizedP2P initializer is used to initialize the store")
+        opt = DecentralizedP2P(opt, params.type_of_decentralized_synchronization)
+    elif params.optimizer == 'momentum':
         mlperf.logger.log(key=mlperf.tags.OPT_NAME,
                           value=mlperf.tags.SGD_WITH_MOMENTUM)
         mlperf.logger.log(key=mlperf.tags.OPT_MOMENTUM, value=params.momentum)
@@ -2641,6 +2657,9 @@ class BenchmarkCNN(object):
         elif self.params.variable_update == 'kungfu':
             import kungfu as kf
             bcast_global_variables_op = kf.distributed_variables_initializer()
+            if self.params.kungfu_strategy == 'none':
+                from kungfu.optimizers import DecentralizedP2P
+                bcast_global_variables_op = DecentralizedP2P.get_initializer()
         else:
             bcast_global_variables_op = None
 
@@ -3825,6 +3844,8 @@ class BenchmarkCNN(object):
                 elif self.params.kungfu_strategy == "nccl_all_reduce":
                     from kungfu.ops import gpu_group_all_reduce
                     grads = gpu_group_all_reduce(grads)
+                elif self.params.kungfu_strategy == "none":
+                    pass
                 else:
                     print(self.params.kungfu_strategy)
                     raise Exception('Unknown kungfu strategy.')

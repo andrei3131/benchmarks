@@ -8,9 +8,9 @@ RUN=1
 train() {
     BATCH=$1
     echo "[BEGIN TRAINING KEY] training-lbr-${RUN}"
-    /home/ab7515/KungFu/bin/kungfu-prun  -np 4 -H 127.0.0.1:4 -timeout 1000000s \
+    kungfu-prun  -np 4 -H 127.0.0.1:4 -timeout 1000000s \
         python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
-        --num_epochs=10 \
+        --num_epochs=20 \
         --eval=False \
         --forward_only=False \
         --print_training_accuracy=True \
@@ -22,22 +22,23 @@ train() {
         --optimizer=momentum \
         --staged_vars=False \
         --variable_update=kungfu \
-        --kungfu_strategy=adaptive_partial_exchange_with_gpu_allreduce \
-        --piecewise_partial_exchange_schedule="0:0.1,80:0.4,120:1" \
+        --kungfu_strategy=partial_exchange_with_schedule \
+        --piecewise_partial_exchange_schedule="0:1,10:0.1,15:1" \
         --use_datasets=True \
         --distortions=False \
         --fuse_decode_and_crop=True \
         --resize_method=bilinear \
-        --display_every=100 \
+        --display_every=1000 \
         --checkpoint_every_n_epochs=True \
         --checkpoint_interval=0.25 \
-        --checkpoint_directory=/home/ab7515/checkpoints-lbr \
+        --checkpoint_directory=/ab7515/checkpoints-lbr \
         --data_format=NCHW \
         --batchnorm_persistent=True \
         --use_tf_layers=True \
-        --winograd_nonfused=True \
-        --trace_file=/data/kungfu/trace-andrei.json \
-        --use_chrome_trace_format=True
+        --winograd_nonfused=True
+
+        #--trace_file=/data/kungfu/trace-andrei.json \
+        #--use_chrome_trace_format=True
     echo "[END TRAINING KEY] training-lbr-${RUN}"
 }
 

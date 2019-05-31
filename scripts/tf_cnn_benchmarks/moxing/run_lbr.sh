@@ -7,9 +7,14 @@ cd /home/work/user-job-dir/benchmarks-fresh/scripts/tf_cnn_benchmarks/
 python moxing/prepare_input.py
 
 
+# export KUNGFU_CONFIG_ENABLE_MONITORING=true
+# export KUNGFU_CONFIG_MONITORING_PERIOD=30s
+
+#-np 16 -H 169.254.128.207:8,169.254.128.185:8 -nic ib0
+
 # Use 2>&1 | to redirect stderr to tee file
 echo "[BEGIN TRAINING KEY] training-parallel"
-kungfu-prun  -np 8 -H 127.0.0.1:8 -timeout 1000000s \
+kungfu-prun -np 8 -H 127.0.0.1:8 -timeout 1000000s \
     python tf_cnn_benchmarks.py --model=resnet50 \
     --data_name=imagenet \
     --data_dir=/cache/data_dir \
@@ -22,11 +27,11 @@ kungfu-prun  -np 8 -H 127.0.0.1:8 -timeout 1000000s \
     --batch_size=64 \
     --momentum=0.9 \
     --weight_decay=0.0001 \
-    --optimizer=momentum \
-    --variable_update=kungfu \
     --staged_vars=False \
-    --kungfu_strategy=partial_exchange_with_schedule \
-    --piecewise_partial_exchange_schedule="0:0.1,30:1" \
+    --optimizer=p2p_averaging \
+    --variable_update=kungfu \
+    --kungfu_strategy=none \
+    --type_of_decentralized_synchronization=async_gpu \
     --use_datasets=True \
     --distortions=False \
     --fuse_decode_and_crop=True \
@@ -41,7 +46,7 @@ kungfu-prun  -np 8 -H 127.0.0.1:8 -timeout 1000000s \
     --winograd_nonfused=True 
 echo "[END TRAINING KEY] training-parallel"
 
-for worker in 0 1 2 3 4 5 6 7  
+for worker in 0 1 2 3 4 5 6 7
 do
 echo "[BEGIN VALIDATION KEY] validation-parallel-worker-${worker}"
 python tf_cnn_benchmarks.py --eval=True --forward_only=False --model=resnet50 --data_name=imagenet --data_dir=/cache/data_dir \
