@@ -376,7 +376,7 @@ flags.DEFINE_string(
     'optimized, write out each partitioned graph to a file '
     'with the given prefix.')
 
-flags.DEFINE_enum('optimizer', 'sgd', ('hybrid_p2p_averaging', 'p2p_averaging', 'momentum', 'sgd', 'rmsprop', 'adam'),
+flags.DEFINE_enum('optimizer', 'sgd', ('momentum', 'sgd', 'rmsprop', 'adam'),
                   'Optimizer to use')
 flags.DEFINE_string('hybrid_model_averaging_schedule', None,
                     'Hybrid model averaging schedule')                    
@@ -1475,39 +1475,7 @@ def get_learning_rate(params, global_step, num_examples_per_epoch, model,
 
 def get_optimizer(params, learning_rate):
     """Returns the optimizer that should be used based on params."""
-    if params.optimizer == 'hybrid_p2p_averaging':
-        mlperf.logger.log(key=mlperf.tags.OPT_NAME,
-                        value=mlperf.tags.SGD_WITH_MOMENTUM)
-        mlperf.logger.log(key=mlperf.tags.OPT_MOMENTUM, value=params.momentum)
-        opt = tf.train.MomentumOptimizer(learning_rate,
-                                        params.momentum,
-                                        use_nesterov=True)
-        
-        from kungfu.optimizers import HybridPeerModelAveraging
-        print("BIG WARNING: YOU SHOULD ENSURE THAT THE HybridPeerModelAveraging initializer is used to initialize the store")
-        
-        
-        opt = HybridPeerModelAveraging(opt, params.hybrid_model_averaging_schedule, 
-                                      params.shard_size, params.batch_size, 
-                                      model_averaging_device=params.model_averaging_device, 
-                                      request_mode=params.request_mode,
-                                      peer_selection_strategy=params.peer_selection_strategy,
-                                      all_reduce_interval=params.hybrid_all_reduce_interval)
-    
-    elif params.optimizer == 'p2p_averaging':
-        mlperf.logger.log(key=mlperf.tags.OPT_NAME,
-                          value=mlperf.tags.SGD_WITH_MOMENTUM)
-        mlperf.logger.log(key=mlperf.tags.OPT_MOMENTUM, value=params.momentum)
-        opt = tf.train.MomentumOptimizer(learning_rate,
-                                         params.momentum,
-                                         use_nesterov=True)
-        # Called PeerModelAveraging                                         
-        from kungfu.optimizers import PeerModelAveraging
-        print("BIG WARNING: YOU SHOULD ENSURE THAT THE PeerModelAveraging initializer is used to initialize the store")
-        opt = PeerModelAveraging(opt, model_averaging_device=params.model_averaging_device, 
-                               request_mode=params.request_mode,
-                               peer_selection_strategy=params.peer_selection_strategy)
-    elif params.optimizer == 'momentum':
+    if params.optimizer == 'momentum':
         mlperf.logger.log(key=mlperf.tags.OPT_NAME,
                           value=mlperf.tags.SGD_WITH_MOMENTUM)
         mlperf.logger.log(key=mlperf.tags.OPT_MOMENTUM, value=params.momentum)
@@ -1528,6 +1496,27 @@ def get_optimizer(params, learning_rate):
     else:
         raise ValueError('Optimizer "{}" was not recognized'.format(
             params.optimizer))
+
+    # Wrap optimizer with kungfu optimizer
+    if self.params.variable_update == 'kungfu':
+      if self.params.kungfu_strategy == 'p2p_averaging':                                     
+        from kungfu.optimizers import PeerModelAveraging
+        print("BIG WARNING: YOU SHOULD ENSURE THAT THE PeerModelAveraging initializer is used to initialize the store")
+        opt = PeerModelAveraging(opt, model_averaging_device=params.model_averaging_device, 
+                               request_mode=params.request_mode,
+                               peer_selection_strategy=params.peer_selection_strategy)
+      if self.params.kungfu_strategy == 'hybrid_averaging': 
+        from kungfu.optimizers import HybridPeerModelAveraging
+        print("BIG WARNING: YOU SHOULD ENSURE THAT THE HybridPeerModelAveraging initializer is used to initialize the store")
+        opt = HybridPeerModelAveraging(opt, params.hybrid_model_averaging_schedule, 
+                                      params.shard_size, params.batch_size, 
+                                      model_averaging_device=params.model_averaging_device, 
+                                      request_mode=params.request_mode,
+                                      peer_selection_strategy=params.peer_selection_strategy,
+                                      all_reduce_interval=params.hybrid_all_reduce_interval)
+      if self.params.kungfu_strategy == 'opt_gradient_averaging': 
+        from kungfu.optimizers import ParallelOptimizer
+        opt = ParallelOptimizer(opt)
     return opt
 
 
@@ -2691,11 +2680,11 @@ class BenchmarkCNN(object):
         elif self.params.variable_update == 'kungfu':
             import kungfu as kf
             bcast_global_variables_op = kf.distributed_variables_initializer()
-            if self.params.kungfu_strategy == 'none':
+            if self.params.kungfu_strategy == 'p2p_averaging':
                 # Called Peer Model Averaging
                 from kungfu.optimizers import PeerModelAveraging
                 bcast_global_variables_op = PeerModelAveraging.get_initializer()
-            elif self.params.kungfu_strategy == 'hybrid':
+            elif self.params.kungfu_strategy == 'hybrid_averaging':
                 from kungfu.optimizers import HybridPeerModelAveraging
                 bcast_global_variables_op = HybridPeerModelAveraging.get_initializer()
         else:
@@ -3882,9 +3871,11 @@ class BenchmarkCNN(object):
                 elif self.params.kungfu_strategy == "nccl_all_reduce":
                     from kungfu.ops import gpu_group_all_reduce
                     grads = gpu_group_all_reduce(grads)
-                elif self.params.kungfu_strategy == "none":
+                elif self.params.kungfu_strategy == 'p2p_averaging':
                     pass
-                elif self.params.kungfu_strategy == "hybrid":
+                elif self.params.kungfu_strategy == 'hybrid_averaging':
+                    pass
+                elif self.params.kungfu_strategy == 'opt_gradient_averaging':
                     pass
                 else:
                     print(self.params.kungfu_strategy)
