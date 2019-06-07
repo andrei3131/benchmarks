@@ -3546,7 +3546,7 @@ class BenchmarkCNN(object):
           grads = gpu_group_all_reduce(grads)
         elif self.params.kungfu_strategy == "all_reduce_gpu_via_cpu":
           from kungfu.ops import all_reduce_gpu_via_cpu
-          grads = all_reduce_gpu_via_cpu(grads)
+          grads = [all_reduce_gpu_via_cpu(g) for g in grads]
         else:
           print(self.params.kungfu_strategy)
           raise Exception('Unknown kungfu strategy.')
