@@ -188,9 +188,9 @@ flags.DEFINE_enum('model_averaging_device', 'cpu', ('cpu', 'gpu'),
                   'Device where model averaging should be executed')
 flags.DEFINE_enum('request_mode', 'sync', ('sync', 'async'),
                   'Type of request for Decentralized P2P Model Averaging')
-flags.DEFINE_enum('peer_selection_strategy', 'random', ('random', 'roundrobin'),
+flags.DEFINE_enum('peer_selection_strategy', 'random',
+                  ('random', 'roundrobin'),
                   'Strategy used to select a peer for model averaging')
-
 
 flags.DEFINE_integer('eval_batch_size', 0,
                      'eval batch size per compute device')
@@ -379,12 +379,12 @@ flags.DEFINE_string(
 flags.DEFINE_enum('optimizer', 'sgd', ('momentum', 'sgd', 'rmsprop', 'adam'),
                   'Optimizer to use')
 flags.DEFINE_string('hybrid_model_averaging_schedule', None,
-                    'Hybrid model averaging schedule')                    
-flags.DEFINE_integer('hybrid_all_reduce_interval', 0,
-                    'Perform all-reduce every hybrid_all_reduce_interval iterations during P2P-KF hybrid run')
-flags.DEFINE_float('shard_size', 0,
-                    'Shard size')
-
+                    'Hybrid model averaging schedule')
+flags.DEFINE_integer(
+    'hybrid_all_reduce_interval', 0,
+    'Perform all-reduce every hybrid_all_reduce_interval iterations during P2P-KF hybrid run'
+)
+flags.DEFINE_float('shard_size', 0, 'Shard size')
 
 flags.DEFINE_float('init_learning_rate', None,
                    'Initial learning rate for training.')
@@ -869,6 +869,7 @@ def _checkpoint_path(root, version):
 
     filepath = os.path.join(directory, 'model.ckpt')
     return filepath, v
+
 
 def andrei_print(x):
     print(['X\n' for i in range(10)])
@@ -1389,7 +1390,8 @@ def get_piecewise_learning_rate(piecewise_learning_rate_schedule, global_step,
         else:
             try:
                 # Andrei - Octavian Brabete (Check what happens if piece representing epoch is float)
-                boundaries.append(int(float(piece) * num_batches_per_epoch) - 1)
+                boundaries.append(
+                    int(float(piece) * num_batches_per_epoch) - 1)
             except ValueError:
                 raise ValueError('Invalid epoch: ' + piece)
     return tf.train.piecewise_constant(global_step,
@@ -1498,25 +1500,38 @@ def get_optimizer(params, learning_rate):
             params.optimizer))
 
     # Wrap optimizer with kungfu optimizer
-    if self.params.variable_update == 'kungfu':
-      if self.params.kungfu_strategy == 'p2p_averaging':                                     
-        from kungfu.optimizers import PeerModelAveraging
-        print("BIG WARNING: YOU SHOULD ENSURE THAT THE PeerModelAveraging initializer is used to initialize the store")
-        opt = PeerModelAveraging(opt, model_averaging_device=params.model_averaging_device, 
-                               request_mode=params.request_mode,
-                               peer_selection_strategy=params.peer_selection_strategy)
-      if self.params.kungfu_strategy == 'hybrid_averaging': 
-        from kungfu.optimizers import HybridPeerModelAveraging
-        print("BIG WARNING: YOU SHOULD ENSURE THAT THE HybridPeerModelAveraging initializer is used to initialize the store")
-        opt = HybridPeerModelAveraging(opt, params.hybrid_model_averaging_schedule, 
-                                      params.shard_size, params.batch_size, 
-                                      model_averaging_device=params.model_averaging_device, 
-                                      request_mode=params.request_mode,
-                                      peer_selection_strategy=params.peer_selection_strategy,
-                                      all_reduce_interval=params.hybrid_all_reduce_interval)
-      if self.params.kungfu_strategy == 'opt_gradient_averaging': 
-        from kungfu.optimizers import ParallelOptimizer
-        opt = ParallelOptimizer(opt)
+    if params.variable_update == 'kungfu':
+        if params.kungfu_strategy == 'p2p_averaging':
+            from kungfu.optimizers import PeerModelAveraging
+            print(
+                "BIG WARNING: YOU SHOULD ENSURE THAT THE PeerModelAveraging initializer is used to initialize the store"
+            )
+            opt = PeerModelAveraging(
+                opt,
+                model_averaging_device=params.model_averaging_device,
+                request_mode=params.request_mode,
+                peer_selection_strategy=params.peer_selection_strategy)
+        elif params.kungfu_strategy == 'hybrid_averaging':
+            from kungfu.optimizers import HybridPeerModelAveraging
+            print(
+                "BIG WARNING: YOU SHOULD ENSURE THAT THE HybridPeerModelAveraging initializer is used to initialize the store"
+            )
+            opt = HybridPeerModelAveraging(
+                opt,
+                params.hybrid_model_averaging_schedule,
+                params.shard_size,
+                params.batch_size,
+                model_averaging_device=params.model_averaging_device,
+                request_mode=params.request_mode,
+                peer_selection_strategy=params.peer_selection_strategy,
+                all_reduce_interval=params.hybrid_all_reduce_interval)
+        elif params.kungfu_strategy == 'opt_gradient_averaging':
+            print("Use parallel optimizer")
+            from kungfu.optimizers import ParallelOptimizer
+            opt = ParallelOptimizer(opt)
+        else:
+            print('Use normal optimizer.')
+
     return opt
 
 
@@ -2203,8 +2218,6 @@ class BenchmarkCNN(object):
                 run_param,
                 test_id=self.params.benchmark_test_id)
 
- 
-
     def run(self):
         """Run the benchmark task assigned to this process.
 
@@ -2265,7 +2278,6 @@ class BenchmarkCNN(object):
                 try:
                     global_step = load_checkpoint(saver, sess,
                                                   self.params.train_dir)
-                    
 
                     image_producer = self._initialize_eval_graph(
                         graph_info.enqueue_ops, graph_info.input_producer_op,
@@ -2521,9 +2533,9 @@ class BenchmarkCNN(object):
         (graph,
          result_to_benchmark) = self._preprocess_graph(graph, build_result)
         with graph.as_default():
-             return self._benchmark_graph(result_to_benchmark,
-                                          eval_build_results)
-                
+            return self._benchmark_graph(result_to_benchmark,
+                                         eval_build_results)
+
     GPU_CACHED_INPUT_VARIABLE_NAME = 'gpu_cached_inputs'
 
     def _unfreezable_local_variables(self, graph):
@@ -2683,10 +2695,12 @@ class BenchmarkCNN(object):
             if self.params.kungfu_strategy == 'p2p_averaging':
                 # Called Peer Model Averaging
                 from kungfu.optimizers import PeerModelAveraging
-                bcast_global_variables_op = PeerModelAveraging.get_initializer()
+                bcast_global_variables_op = PeerModelAveraging.get_initializer(
+                )
             elif self.params.kungfu_strategy == 'hybrid_averaging':
                 from kungfu.optimizers import HybridPeerModelAveraging
-                bcast_global_variables_op = HybridPeerModelAveraging.get_initializer()
+                bcast_global_variables_op = HybridPeerModelAveraging.get_initializer(
+                )
         else:
             bcast_global_variables_op = None
 
@@ -3023,7 +3037,8 @@ class BenchmarkCNN(object):
         # Save the model checkpoint.
         if self.params.train_dir is not None and is_chief:
             checkpoint_path = os.path.join(self.params.train_dir, 'model.ckpt')
-            print("I am saving the checkpoint here: " + checkpoint_path + ", Global step: " + str(graph_info.global_step))
+            print("I am saving the checkpoint here: " + checkpoint_path +
+                  ", Global step: " + str(graph_info.global_step))
             if not gfile.Exists(self.params.train_dir):
                 gfile.MakeDirs(self.params.train_dir)
             supervisor.saver.save(sess, checkpoint_path,
@@ -3821,7 +3836,8 @@ class BenchmarkCNN(object):
             if self.params.variable_update == 'kungfu':
                 if self.params.kungfu_strategy == "ako_p2p":
                     from kungfu.ops import ako_p2p
-                    grads = ako_p2p(grads, self.params.partial_exchange_fraction)   
+                    grads = ako_p2p(grads,
+                                    self.params.partial_exchange_fraction)
                 elif self.params.kungfu_strategy == "partial_exchange":
                     from kungfu.ops import partial_exchange_group_all_reduce
                     num_train = datasets.CIFAR10_NUM_TRAIN_IMAGES if self.params.data_name == "cifar10" else datasets.IMAGENET_NUM_TRAIN_IMAGES
@@ -3839,7 +3855,7 @@ class BenchmarkCNN(object):
                         self.params.batch_size,
                         num_train,
                         self.params.piecewise_partial_exchange_schedule,
-                        )
+                    )
                 elif self.params.kungfu_strategy == "adaptive_partial_exchange_with_gpu_allreduce":
                     from kungfu.ops import adaptive_partial_exchange_with_gpu_allreduce
                     num_train = datasets.CIFAR10_NUM_TRAIN_IMAGES if self.params.data_name == "cifar10" else datasets.IMAGENET_NUM_TRAIN_IMAGES
