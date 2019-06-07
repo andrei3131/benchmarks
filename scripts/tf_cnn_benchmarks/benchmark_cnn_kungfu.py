@@ -184,10 +184,12 @@ flags.DEFINE_string(
                     partial_exchange_accumulation_avg_peers, partial_exchange_accumulation_avg_window. \
                     If not specified, default is parallel')
 
-flags.DEFINE_enum('type_of_decentralized_synchronization', 'sync_gpu', ('sync_cpu', 'async_cpu', 'sync_gpu', 'async_gpu'),
-                  'Name of Decentralized Synchronization Strategy')
-
-
+flags.DEFINE_enum('model_averaging_device', 'cpu', ('cpu', 'gpu'),
+                  'Device where model averaging should be executed')
+flags.DEFINE_enum('request_mode', 'sync', ('sync', 'async'),
+                  'Type of request for Decentralized P2P Model Averaging')
+flags.DEFINE_enum('peer_selection_strategy', 'random', ('random', 'roundrobin'),
+                  'Strategy used to select a peer for model averaging')
 
 
 flags.DEFINE_integer('eval_batch_size', 0,
@@ -373,8 +375,17 @@ flags.DEFINE_string(
     'If specified, after the graph has been partitioned and '
     'optimized, write out each partitioned graph to a file '
     'with the given prefix.')
-flags.DEFINE_enum('optimizer', 'sgd', ('p2p_averaging', 'momentum', 'sgd', 'rmsprop', 'adam'),
+
+flags.DEFINE_enum('optimizer', 'sgd', ('hybrid_p2p_averaging', 'p2p_averaging', 'momentum', 'sgd', 'rmsprop', 'adam'),
                   'Optimizer to use')
+flags.DEFINE_string('hybrid_model_averaging_schedule', None,
+                    'Hybrid model averaging schedule')                    
+flags.DEFINE_integer('hybrid_all_reduce_interval', 0,
+                    'Perform all-reduce every hybrid_all_reduce_interval iterations during P2P-KF hybrid run')
+flags.DEFINE_float('shard_size', 0,
+                    'Shard size')
+
+
 flags.DEFINE_float('init_learning_rate', None,
                    'Initial learning rate for training.')
 flags.DEFINE_string(
@@ -1377,7 +1388,8 @@ def get_piecewise_learning_rate(piecewise_learning_rate_schedule, global_step,
                 raise ValueError('Invalid learning rate: ' + piece)
         else:
             try:
-                boundaries.append(int(int(piece) * num_batches_per_epoch) - 1)
+                # Andrei - Octavian Brabete (Check what happens if piece representing epoch is float)
+                boundaries.append(int(float(piece) * num_batches_per_epoch) - 1)
             except ValueError:
                 raise ValueError('Invalid epoch: ' + piece)
     return tf.train.piecewise_constant(global_step,
@@ -1463,16 +1475,38 @@ def get_learning_rate(params, global_step, num_examples_per_epoch, model,
 
 def get_optimizer(params, learning_rate):
     """Returns the optimizer that should be used based on params."""
-    if params.optimizer == 'p2p_averaging':
+    if params.optimizer == 'hybrid_p2p_averaging':
+        mlperf.logger.log(key=mlperf.tags.OPT_NAME,
+                        value=mlperf.tags.SGD_WITH_MOMENTUM)
+        mlperf.logger.log(key=mlperf.tags.OPT_MOMENTUM, value=params.momentum)
+        opt = tf.train.MomentumOptimizer(learning_rate,
+                                        params.momentum,
+                                        use_nesterov=True)
+        
+        from kungfu.optimizers import HybridPeerModelAveraging
+        print("BIG WARNING: YOU SHOULD ENSURE THAT THE HybridPeerModelAveraging initializer is used to initialize the store")
+        
+        
+        opt = HybridPeerModelAveraging(opt, params.hybrid_model_averaging_schedule, 
+                                      params.shard_size, params.batch_size, 
+                                      model_averaging_device=params.model_averaging_device, 
+                                      request_mode=params.request_mode,
+                                      peer_selection_strategy=params.peer_selection_strategy,
+                                      all_reduce_interval=params.hybrid_all_reduce_interval)
+    
+    elif params.optimizer == 'p2p_averaging':
         mlperf.logger.log(key=mlperf.tags.OPT_NAME,
                           value=mlperf.tags.SGD_WITH_MOMENTUM)
         mlperf.logger.log(key=mlperf.tags.OPT_MOMENTUM, value=params.momentum)
         opt = tf.train.MomentumOptimizer(learning_rate,
                                          params.momentum,
                                          use_nesterov=True)
-        from kungfu.optimizers import DecentralizedP2P
-        print("BIG WARNING: YOU SHOULD ENSURE THAT THE DecentralizedP2P initializer is used to initialize the store")
-        opt = DecentralizedP2P(opt, params.type_of_decentralized_synchronization)
+        # Called PeerModelAveraging                                         
+        from kungfu.optimizers import PeerModelAveraging
+        print("BIG WARNING: YOU SHOULD ENSURE THAT THE PeerModelAveraging initializer is used to initialize the store")
+        opt = PeerModelAveraging(opt, model_averaging_device=params.model_averaging_device, 
+                               request_mode=params.request_mode,
+                               peer_selection_strategy=params.peer_selection_strategy)
     elif params.optimizer == 'momentum':
         mlperf.logger.log(key=mlperf.tags.OPT_NAME,
                           value=mlperf.tags.SGD_WITH_MOMENTUM)
@@ -2658,8 +2692,12 @@ class BenchmarkCNN(object):
             import kungfu as kf
             bcast_global_variables_op = kf.distributed_variables_initializer()
             if self.params.kungfu_strategy == 'none':
-                from kungfu.optimizers import DecentralizedP2P
-                bcast_global_variables_op = DecentralizedP2P.get_initializer()
+                # Called Peer Model Averaging
+                from kungfu.optimizers import PeerModelAveraging
+                bcast_global_variables_op = PeerModelAveraging.get_initializer()
+            elif self.params.kungfu_strategy == 'hybrid':
+                from kungfu.optimizers import HybridPeerModelAveraging
+                bcast_global_variables_op = HybridPeerModelAveraging.get_initializer()
         else:
             bcast_global_variables_op = None
 
@@ -3804,7 +3842,7 @@ class BenchmarkCNN(object):
                         num_train,
                         fraction=self.params.partial_exchange_fraction,
                         accumulate=False)
-                elif self.params.kungfu_strategy == "partial_exchange_with_schedule":
+                elif self.params.kungfu_strategy == "partial_exchange_group_all_reduce_with_schedule":
                     from kungfu.ops import partial_exchange_group_all_reduce_with_schedule
                     num_train = datasets.CIFAR10_NUM_TRAIN_IMAGES if self.params.data_name == "cifar10" else datasets.IMAGENET_NUM_TRAIN_IMAGES
                     grads = partial_exchange_group_all_reduce_with_schedule(
@@ -3845,6 +3883,8 @@ class BenchmarkCNN(object):
                     from kungfu.ops import gpu_group_all_reduce
                     grads = gpu_group_all_reduce(grads)
                 elif self.params.kungfu_strategy == "none":
+                    pass
+                elif self.params.kungfu_strategy == "hybrid":
                     pass
                 else:
                     print(self.params.kungfu_strategy)

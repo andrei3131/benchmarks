@@ -637,6 +637,14 @@ class BaseImagePreprocessor(InputPreprocessor):
   def preprocess(self, image_buffer, bbox, batch_position):
     raise NotImplementedError('Must be implemented by subclass.')
 
+  # Andrei - Octavian Brarbete
+  def _get_shard_peer_info(self):
+      import json, os
+      cluster_spec = json.loads(os.getenv('KUNGFU_CLUSTER_SPEC'))
+      num_peers = len(cluster_spec['Peers']) 
+      self_rank = int(os.getenv('KUNGFU_TEST_SELF_RANK'))
+      return num_peers, self_rank
+
   def create_dataset(self,
                      batch_size,
                      num_splits,
@@ -655,7 +663,7 @@ class BaseImagePreprocessor(InputPreprocessor):
     glob_pattern = dataset.tf_record_pattern(subset)
     file_names = gfile.Glob(glob_pattern)
     if not file_names:
-      raise ValueError('Found no files in --data_dir matching: {}'
+       raise ValueError('Found no files in --data_dir matching: {}'
                        .format(glob_pattern))
     ds = tf.data.TFRecordDataset.list_files(file_names, shuffle=train)
     ds = ds.apply(
@@ -973,6 +981,7 @@ class Cifar100ImagePreprocessor(BaseImagePreprocessor):
           [input_image, input_label], batch_size=self.batch_size,
           capacity=min_queue_examples + 3 * self.batch_size,
           min_after_dequeue=min_queue_examples)
+
 
       images = [[] for i in range(self.num_splits)]
       labels = [[] for i in range(self.num_splits)]
