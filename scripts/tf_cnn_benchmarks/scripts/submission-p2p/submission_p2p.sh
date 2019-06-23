@@ -3,27 +3,9 @@
 
 mkdir /data/kungfu/checkpoints-lbr
 
-######## pkill -f python3
-# cd /ab7515/KungFu
-# env KUNGFU_USE_NCCL=0 pip3 install --no-index --user -U .
-# cd /ab7515/benchmarks/benchmarks-fresh/scripts/tf_cnn_benchmarks
-
-
-
-# cd /home/ab7515/KungFu
-# env KUNGFU_USE_NCCL=1 pip3 install --no-index .
-# cd /home/ab7515/benchmarks/benchmarks-fresh/scripts/tf_cnn_benchmarks
-
-
-# export KUNGFU_CONFIG_ENABLE_MONITORING=true
-# export KUNGFU_CONFIG_MONITORING_PERIOD=10s
-
-
-# --model=resnet50 --data_name=imagenet --data_dir=/data/imagenet/records
-
 RUN=1
-#adaptive_partial_exchange_with_cpu_allreduce
 
+# Uncomment to enable latency monitoring.
 # export KUNGFU_CONFIG_ENABLE_LATENCY_MONITORING=true
 
 mkdir /home/ab7515/abc
@@ -32,6 +14,7 @@ train() {
     BATCH=$1
     echo "[BEGIN TRAINING KEY] training-lbr-${RUN}"
     N_PEERS=4
+    # Specify data directory to train on real data
     # --data_dir=/data/imagenet/records
     kungfu-prun  -np ${N_PEERS} -H 127.0.0.1:${N_PEERS} -timeout 1000000s \
         python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10  \
@@ -67,7 +50,7 @@ train() {
 }
 
 validate() {
-    for worker in 0 #  2 3 # 4 5 6 7
+    for worker in 0 1 2 3 4
     do
     echo "[BEGIN VALIDATION KEY] validation-lbr-${RUN}-worker-${worker}"
     python3 tf_cnn_benchmarks.py --eval=True --forward_only=False --model=resnet32 --data_name=cifar10 \
@@ -82,4 +65,5 @@ validate() {
 
 
 train 64
-#validate
+# Uncomment to perform validation
+# validate
