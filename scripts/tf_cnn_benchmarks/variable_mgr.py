@@ -190,6 +190,10 @@ class VariableMgrIndependent(VariableMgr):
     device_grads = gradient_state
     tower_grad = device_grads[device_num]
 
+    print("device num: " + str(device_num))
+    print("device grads" + str(len(device_grads)))
+    print("gradient state" + str(len(tower_grad)))
+
     if self.benchmark_cnn.enable_auto_loss_scale and device_num == 0:
       # Since we don't aggregate variables in --independent mode, we cannot tell
       # if there are NaNs on all GPUs. So we arbitrarily choose to only check

@@ -10,13 +10,17 @@ cd /home/work/user-job-dir/benchmarks-fresh/scripts/tf_cnn_benchmarks/
 # export KUNGFU_CONFIG_ENABLE_MONITORING=true
 # export KUNGFU_CONFIG_MONITORING_PERIOD=30s
 
+# export REQUEST_LATENCY_MEASUREMENT=true
 
 echo "[BEGIN TRAINING KEY] training-SYNC"
 # Use synthetic data to test performance
+
+# export KUNGFU_CONFIG_ENABLE_LATENCY_MONITORING=true
+
 /KungFu/bin/kungfu-huawei-launcher -timeout 1000000s \
     python tf_cnn_benchmarks.py --model=resnet50 \
     --data_name=imagenet \
-    --num_batches=300 \
+    --num_batches=1000 \
     --eval=False \
     --forward_only=False \
     --print_training_accuracy=True \
@@ -29,12 +33,14 @@ echo "[BEGIN TRAINING KEY] training-SYNC"
     --optimizer=p2p_averaging \
     --variable_update=kungfu \
     --kungfu_strategy=none \
-    --type_of_decentralized_synchronization=async_gpu \
+    --model_averaging_device=gpu \
+    --request_mode=sync \
+    --window_size=64 \
     --use_datasets=True \
     --distortions=False \
     --fuse_decode_and_crop=True \
     --resize_method=bilinear \
-    --display_every=100 \
+    --display_every=50 \
     --checkpoint_every_n_epochs=False \
     --checkpoint_interval=0.125 \
     --checkpoint_directory=/cache/checkpoints-parallel \
@@ -49,7 +55,7 @@ echo "[END TRAINING KEY] training-SYNC"
 # /KungFu/bin/kungfu-huawei-launcher -timeout 1000000s \
 #     python tf_cnn_benchmarks.py --model=resnet50 \
 #     --data_name=imagenet \
-#     --num_batches=300 \
+#     --num_batches=100 \
 #     --eval=False \
 #     --forward_only=False \
 #     --print_training_accuracy=True \
@@ -62,7 +68,9 @@ echo "[END TRAINING KEY] training-SYNC"
 #     --optimizer=p2p_averaging \
 #     --variable_update=kungfu \
 #     --kungfu_strategy=none \
-#     --type_of_decentralized_synchronization=async \
+#     --model_averaging_device=gpu \
+#     --request_mode=async \
+#     --peer_selection_strategy=random \
 #     --use_datasets=True \
 #     --distortions=False \
 #     --fuse_decode_and_crop=True \
@@ -83,7 +91,7 @@ echo "[END TRAINING KEY] training-SYNC"
 # /KungFu/bin/kungfu-huawei-launcher -timeout 1000000s \
 #     python tf_cnn_benchmarks.py --model=resnet50 \
 #     --data_name=imagenet \
-#     --num_batches=300 \
+#     --num_batches=100 \
 #     --eval=False \
 #     --forward_only=False \
 #     --print_training_accuracy=True \
@@ -115,7 +123,7 @@ echo "[END TRAINING KEY] training-SYNC"
 # # Use synthetic data to test performance
 #     python tf_cnn_benchmarks.py --model=resnet50 \
 #     --data_name=imagenet \
-#     --num_batches=300 \
+#     --num_batches=100 \
 #     --eval=False \
 #     --forward_only=False \
 #     --print_training_accuracy=True \
@@ -141,4 +149,4 @@ echo "[END TRAINING KEY] training-SYNC"
 #     --winograd_nonfused=True 
 # echo "[END TRAINING KEY] training-INDEPENDENT"
 
-#python moxing/prepare_output.py
+# #python moxing/prepare_output.py

@@ -12,11 +12,12 @@ cd /ab7515/benchmarks/benchmarks-fresh/scripts/tf_cnn_benchmarks
 RUN=1
 #adaptive_partial_exchange_with_cpu_allreduce
 train() {
+    # 0:0.1,4:0.1
     BATCH=$1
     echo "[BEGIN TRAINING KEY] training-lbr-${RUN}"
     kungfu-prun  -np 4 -H 127.0.0.1:4 -timeout 1000000s \
-        python3 tf_cnn_benchmarks.py --model=resnet32 --data_name=cifar10 --data_dir=/data/cifar-10/cifar-10-batches-py \
-        --num_epochs=4 \
+        python3 tf_cnn_benchmarks.py --model=resnet50 --data_name=imagenet --data_dir=/data/imagenet/records \
+        --num_epochs=1 \
         --eval=False \
         --forward_only=False \
         --print_training_accuracy=True \
@@ -28,8 +29,8 @@ train() {
         --optimizer=momentum \
         --staged_vars=False \
         --variable_update=kungfu \
-        --piecewise_partial_exchange_schedule="0:0.1,2:1" \
-        --kungfu_strategy=partial_exchange_with_schedule \
+        --piecewise_partial_exchange_schedule="0:0.1,0.001:1" \
+        --kungfu_strategy=partial_exchange_group_all_reduce_with_schedule \
         --use_datasets=True \
         --distortions=False \
         --fuse_decode_and_crop=True \
