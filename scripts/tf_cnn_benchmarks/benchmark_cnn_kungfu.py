@@ -379,6 +379,7 @@ flags.DEFINE_string(
 flags.DEFINE_enum('optimizer', 'sgd', ('adaptive_p2p_averaging', 'hybrid_p2p_averaging', 'p2p_averaging', 'momentum', 'sgd', 'rmsprop', 'adam'),
                   'Optimizer to use')
 # Adaptive p2p window size
+# Not supported
 flags.DEFINE_integer(
     'window_size', 10,
     'Adaptive peer selection sliding window for peer ranking based on latency.')
@@ -1491,6 +1492,7 @@ def get_optimizer(params, learning_rate):
                                         use_nesterov=True)
         
         from kungfu.optimizers import HybridPeerModelAveraging
+        print("Not supported.")
         print("BIG WARNING: YOU SHOULD ENSURE THAT THE HybridPeerModelAveraging initializer is used to initialize the store")
         
         
@@ -1513,7 +1515,7 @@ def get_optimizer(params, learning_rate):
         print("BIG WARNING: YOU SHOULD ENSURE THAT THE PeerModelAveraging initializer is used to initialize the store")
         opt = PeerModelAveraging(opt, model_averaging_device=params.model_averaging_device, 
                                request_mode=params.request_mode,
-                               peer_selection_strategy=params.peer_selection_strategy, window_size=params.window_size)
+                               peer_selection_strategy=params.peer_selection_strategy)
     elif params.optimizer == 'adaptive_p2p_averaging':
         mlperf.logger.log(key=mlperf.tags.OPT_NAME,
                           value=mlperf.tags.SGD_WITH_MOMENTUM)
@@ -1523,6 +1525,7 @@ def get_optimizer(params, learning_rate):
                                          use_nesterov=True)
         # Called PeerModelAveraging                                         
         from kungfu.optimizers import AdaptivePeerModelAveraging
+        print("Not supported.")
         print("BIG WARNING: YOU SHOULD ENSURE THAT THE PeerModelAveraging initializer is used to initialize the store")
         opt = AdaptivePeerModelAveraging(opt, window_size=params.window_size)
     elif params.optimizer == 'momentum':
